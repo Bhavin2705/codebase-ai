@@ -1,0 +1,39 @@
+# Environment & secrets
+.env
+*.env
+backend/.env
+
+# Markdown files
+*.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node / JS dependencies & builds
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+npm-debug.log*
+yarn-debug.log*
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.agents/
+
+# Local databases & uploads
+backend/data/
+*.sqlite
+*.db
