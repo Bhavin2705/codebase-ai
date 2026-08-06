@@ -1,0 +1,95 @@
+import React, { useState, useEffect } from 'react';
+import { Folder, FileCode, FileText, HelpCircle } from 'lucide-react';
+import { MOCK_FILE_TREE } from '../../data/mockData';
+import { API_BASE_URL } from '../../config';
+
+export default function NavPanel({ selectedRepo, onSelectFile }) {
+  const repoId = selectedRepo ? selectedRepo.id : 'repo-1';
+  const isDefaultRepo = repoId === 'repo-1';
+  
+  const getInitialTree = () => {
+    if (selectedRepo?.file_tree && selectedRepo.file_tree.length > 0) return selectedRepo.file_tree;
+    if (selectedRepo?.fileTree && selectedRepo.fileTree.length > 0) return selectedRepo.fileTree;
+    return isDefaultRepo ? MOCK_FILE_TREE : [];
+  };
+
+  const [tree, setTree] = useState(getInitialTree);
+
+  useEffect(() => {
+    const existing = selectedRepo?.file_tree || selectedRepo?.fileTree;
+    if (existing && existing.length > 0) {
+      setTree(existing);
+    }
+
+    if (!repoId) return;
+
+    fetch(`${API_BASE_URL}/repositories/${encodeURIComponent(repoId)}/tree`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setTree(data);
+        } else if (!existing || existing.length === 0) {
+          setTree(isDefaultRepo ? MOCK_FILE_TREE : []);
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to fetch repo tree:', err);
+        if (!existing || existing.length === 0) {
+          setTree(isDefaultRepo ? MOCK_FILE_TREE : []);
+        }
+      });
+  }, [repoId, selectedRepo, isDefaultRepo]);
+
+  const renderTree = (nodes) => {
+    return nodes.map((node, i) => {
+      const isDir = node.type === 'dir' || node.type === 'folder' || Boolean(node.children);
+      const name = node.name || (node.path ? node.path.split('/').pop() : 'folder');
+
+      if (isDir) {
+        return (
+          <div key={i} style={{ marginLeft: '6px' }}>
+            <div className="tree-node dir">
+              <Folder size={14} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
+              <span>{name}</span>
+            </div>
+            {node.children && node.children.length > 0 && renderTree(node.children)}
+          </div>
+        );
+      }
+
+      const isDoc = name.endsWith('.md') || name.endsWith('.txt');
+
+      return (
+        <div 
+          key={i} 
+          className="tree-node file" 
+          onClick={() => onSelectFile && onSelectFile(node.path)}
+        >
+          {isDoc ? (
+            <FileText size={14} style={{ color: 'var(--text-subtle)', flexShrink: 0 }} />
+          ) : (
+            <FileCode size={14} style={{ color: 'var(--accent-violet)', flexShrink: 0 }} />
+          )}
+          <span>{name}</span>
+        </div>
+      );
+    });
+  };
+
+  return (
+    <nav className="nav-panel">
+      <div className="panel-header">Repository Explorer</div>
+      <div className="nav-section">
+        {renderTree(tree)}
+      </div>
+
+      <div className="panel-header" style={{ borderTop: '1px solid var(--border-color)', marginTop: 'auto' }}>
+        Recent Questions
+      </div>
+      <div style={{ padding: '10px 14px', fontSize: '11px', color: 'var(--text-muted)' }}>
+        <div style={{ padding: '4px 0', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}>• How does architecture flow work?</div>
+        <div style={{ padding: '4px 0', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}>• Explain routes & data handling</div>
+      </div>
+    </nav>
+  );
+}
