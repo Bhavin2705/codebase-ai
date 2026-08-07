@@ -90,6 +90,8 @@ class IndexingService:
                     status="pending"
                 )
                 db.add(repo_version)
+                # Set the job's repository_version_id
+                job.repository_version_id = repo_version.id
                 await db.commit()
 
                 scanned_file_pairs = self.git_service.scan_files(repo_dir)
@@ -112,7 +114,7 @@ class IndexingService:
 
                         file_record = FileModel(
                             id=file_uuid,
-                            repository_id=repo.id,
+                            repository_version_id=repo_version.id,
                             path=relative_path,
                             language=file_extension or "text",
                             content=code_content,
@@ -152,12 +154,7 @@ class IndexingService:
                 await db.commit()
 
                 async with db.begin():
-                    # Clean up existing files and symbols before adding newly indexed ones
-                    existing_files_stmt = select(FileModel).where(FileModel.repository_id == repo.id)
-                    existing_files = (await db.execute(existing_files_stmt)).scalars().all()
-                    for ef in existing_files:
-                        await db.delete(ef)
-
+                    # Add new files and symbols (don't delete previous versions)
                     for f in file_records_to_add:
                         db.add(f)
 
@@ -165,6 +162,8 @@ class IndexingService:
                         db.add(s)
 
                     repo_version.status = "active"
+                    # Set current_version_id only after successful indexing
+                    repo.current_version_id = repo_version.id
                     repo.status = "ready"
                     repo.indexed_at = datetime.utcnow()
 
@@ -178,6 +177,7 @@ class IndexingService:
                 job.error_message = str(pipeline_err)
                 if repo_version:
                     repo_version.status = "failed"
+                # Do NOT change current_version_id on failure
                 repo.status = "error"
                 await db.commit()
             finally:

@@ -59,10 +59,17 @@ class RetrievalService:
         if not repo:
             return [], repo_meta
 
-        # Query files and symbols for the target repository
-        stmt_files = select(FileModel).options(selectinload(FileModel.symbols)).where(FileModel.repository_id == repo.id)
-        db_files = (await db.execute(stmt_files)).scalars().all()
-        repo_meta["total_files"] = len(db_files)
+        # Query files and symbols for the target repository through current version
+        if repo.current_version_id:
+            stmt_files = select(FileModel).options(selectinload(FileModel.symbols)).where(
+                FileModel.repository_version_id == repo.current_version_id
+            )
+            db_files = (await db.execute(stmt_files)).scalars().all()
+            repo_meta["total_files"] = len(db_files)
+        else:
+            # If no current version, return empty
+            db_files = []
+            repo_meta["total_files"] = 0
 
         # Generate dense query embedding
         query_vector = []

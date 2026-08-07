@@ -132,13 +132,28 @@ async def import_repository(payload: RepoImportRequest, db: AsyncSession = Depen
         indexed_at=now
     )
     db.add(repository_record)
-
+    await db.flush()  # Get the repository ID
+    
+    # Create a repository version for the initial import
+    commit_sha = hashlib.sha256(f"{repo_uuid}-{now}".encode("utf-8")).hexdigest()[:8]
+    repo_version = RepositoryVersion(
+        id=uuid.uuid4(),
+        repository_id=repo_uuid,
+        commit_sha=commit_sha,
+        status="active"
+    )
+    db.add(repo_version)
+    await db.flush()
+    
+    # Set current version
+    repository_record.current_version_id = repo_version.id
+    
     for relative_path, file_data in file_contents.items():
         file_uuid = uuid.uuid4()
         file_extension = os.path.splitext(relative_path)[1].lower()
         file_record = FileModel(
             id=file_uuid,
-            repository_id=repo_uuid,
+            repository_version_id=repo_version.id,
             path=relative_path,
             language=file_extension or "text",
             content=file_data["content"],
@@ -218,8 +233,14 @@ async def get_repository_tree(repository_id: str, db: AsyncSession = Depends(get
 async def get_repository_file(repository_id: str, path: str = Query(..., description="Relative file path"), db: AsyncSession = Depends(get_db)):
     repo = await _get_repo_by_id_or_name(repository_id, db)
 
-    stmt = select(FileModel).options(selectinload(FileModel.symbols)).where(FileModel.repository_id == repo.id)
-    files = (await db.execute(stmt)).scalars().all()
+    # Get files from current version
+    if repo.current_version_id:
+        stmt = select(FileModel).options(selectinload(FileModel.symbols)).where(
+            FileModel.repository_version_id == repo.current_version_id
+        )
+        files = (await db.execute(stmt)).scalars().all()
+    else:
+        files = []
 
     target_file = None
     for file in files:
