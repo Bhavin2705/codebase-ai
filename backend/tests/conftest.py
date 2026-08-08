@@ -34,3 +34,11 @@ def mock_external_services(monkeypatch):
 def client():
     with TestClient(app) as c:
         yield c
+
+from app.database import engine
+
+@pytest.fixture(autouse=True)
+def cleanup_db():
+    engine.sync_engine.dispose()
+    yield
+    engine.sync_engine.dispose()

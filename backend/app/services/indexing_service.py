@@ -12,36 +12,18 @@ from app.models.repository_version import RepositoryVersion
 from app.models.file import File as FileModel
 from app.models.symbol import Symbol as SymbolModel
 from app.models.indexing_job import IndexingJob
-from app.services.git_service import GitService
+from app.services.git_service import GitService, detect_language
 from app.services.parser_service import CodeParserService
 from app.services.embedding_service import EmbeddingService
 
-
 class IndexingService:
     def __init__(self):
-        self.git_service = GitService()
-        self.parser_service = CodeParserService()
-        self.embedding_service = EmbeddingService()
-
-    def _detect_language(self, scanned_file_pairs: List[Tuple[str, str]]) -> str:
-        extension_counts: Dict[str, int] = {}
-        for relative_path, _ in scanned_file_pairs:
-            file_extension = os.path.splitext(relative_path)[1].lower()
-            extension_counts[file_extension] = extension_counts.get(file_extension, 0) + 1
-
-        js_ts_count = extension_counts.get('.js', 0) + extension_counts.get('.jsx', 0) + extension_counts.get('.ts', 0) + extension_counts.get('.tsx', 0)
-        java_count = extension_counts.get('.java', 0)
-        py_count = extension_counts.get('.py', 0)
-
-        if js_ts_count > java_count and js_ts_count > py_count:
-            return "JavaScript / React / Node"
-        elif java_count >= py_count and java_count > 0:
-            return "Java / Spring Boot"
-        elif py_count > 0:
-            return "Python"
-        return "Multi-Language"
+        self.git = GitService()
+        self.parser = CodeParserService()
+        self.embedder = EmbeddingService()
 
     async def run_pipeline(self, job_id_str: str) -> None:
+
         async with AsyncSessionLocal() as db:
             try:
                 job_uuid = uuid.UUID(job_id_str)
@@ -62,127 +44,175 @@ class IndexingService:
                 return
 
             repo_dir = None
-            repo_version = None
+            ver = None
 
             try:
-                # 1. Stage: cloning
                 job.status = "running"
-                job.stage = "cloning"
+                job.current_stage = "cloning"
+                job.progress = 10
                 await db.commit()
 
-                repo_dir = self.git_service.clone_repository(repo.github_url)
+                repo_dir = self.git.clone_repository(repo.github_url)
+                commit_sha = self.git.get_commit_sha(repo_dir)
 
-                commit_sha = "head"
-                try:
-                    if hasattr(self.git_service, "get_commit_sha"):
-                        commit_sha = self.git_service.get_commit_sha(repo_dir)
-                    else:
-                        commit_sha = hashlib.sha256(f"{repo.id}-{datetime.utcnow()}".encode("utf-8")).hexdigest()[:8]
-                except Exception:
-                    commit_sha = hashlib.sha256(f"{repo.id}-{datetime.utcnow()}".encode("utf-8")).hexdigest()[:8]
+                job.current_stage = "parsing"
+                job.progress = 30
 
-                # 2. Stage: parsing
-                job.stage = "parsing"
-                repo_version = RepositoryVersion(
-                    id=uuid.uuid4(),
-                    repository_id=repo.id,
-                    commit_sha=commit_sha,
-                    status="pending"
+                stmt_existing_ver = select(RepositoryVersion).where(
+                    RepositoryVersion.repository_id == repo.id,
+                    RepositoryVersion.commit_sha == commit_sha
                 )
-                db.add(repo_version)
-                # Set the job's repository_version_id
-                job.repository_version_id = repo_version.id
+                existing_ver = (await db.execute(stmt_existing_ver)).scalars().first()
+
+                from datetime import timezone
+                now_utc = datetime.now(timezone.utc)
+
+                if existing_ver and existing_ver.status in ("active", "completed"):
+                    repo.current_version_id = existing_ver.id
+                    repo.status = "ready"
+                    repo.indexed_at = existing_ver.indexed_at or now_utc
+                    job.repository_version_id = existing_ver.id
+                    job.status = "completed"
+                    job.current_stage = "completed"
+                    job.progress = 100
+                    job.completed_at = now_utc
+                    await db.commit()
+                    return
+
+                if existing_ver:
+                    ver = existing_ver
+                    ver.status = "pending"
+                    ver.error_message = None
+                else:
+                    ver = RepositoryVersion(
+                        id=uuid.uuid4(),
+                        repository_id=repo.id,
+                        commit_sha=commit_sha,
+                        status="pending"
+                    )
+                    db.add(ver)
+
+                job.repository_version_id = ver.id
                 await db.commit()
 
-                scanned_file_pairs = self.git_service.scan_files(repo_dir)
-                language = self._detect_language(scanned_file_pairs)
-                repo.language = language
+                file_pairs = self.git.scan_files(repo_dir)
+                repo.language = detect_language(file_pairs)
 
-                file_records_to_add = []
-                symbol_records_to_add = []
+                old_hashes: Dict[str, str] = {}
+                if repo.current_version_id:
+                    stmt_old = select(FileModel).where(FileModel.repository_version_id == repo.current_version_id)
+                    old_files = (await db.execute(stmt_old)).scalars().all()
+                    old_hashes = {f.path: f.content_hash for f in old_files if f.content_hash}
 
-                for relative_path, absolute_path in scanned_file_pairs:
+                files_to_add = []
+                symbols_to_add = []
+                class_cnt = 0
+                method_cnt = 0
+
+                for rel_path, abs_path in file_pairs:
                     try:
-                        with open(absolute_path, "r", encoding="utf-8", errors="ignore") as file_handle:
-                            code_content = file_handle.read()
+                        with open(abs_path, "r", encoding="utf-8", errors="ignore") as fh:
+                            code = fh.read()
 
-                        file_extension = os.path.splitext(relative_path)[1].lower()
-                        parsed_symbols = self.parser_service.parse_file(relative_path, code_content, file_extension)
-
-                        content_hash = hashlib.sha256(code_content.encode("utf-8")).hexdigest()
+                        ext = os.path.splitext(rel_path)[1].lower()
+                        chash = hashlib.sha256(code.encode("utf-8")).hexdigest()
                         file_uuid = uuid.uuid4()
 
-                        file_record = FileModel(
+                        file_rec = FileModel(
                             id=file_uuid,
-                            repository_version_id=repo_version.id,
-                            path=relative_path,
-                            language=file_extension or "text",
-                            content=code_content,
-                            content_hash=content_hash
+                            repository_version_id=ver.id,
+                            path=rel_path,
+                            language=ext or "text",
+                            content=code,
+                            content_hash=chash
                         )
-                        file_records_to_add.append(file_record)
+                        files_to_add.append(file_rec)
 
-                        for sym_data in parsed_symbols:
-                            sym_record = SymbolModel(
+                        parsed_syms = self.parser.parse_file(rel_path, code, ext)
+                        for sym_data in parsed_syms:
+                            stype = sym_data.get("symbol_type", "function")
+                            if stype in ("class", "interface", "component", "model"):
+                                class_cnt += 1
+                            else:
+                                method_cnt += 1
+
+                            sym_rec = SymbolModel(
                                 id=uuid.uuid4(),
                                 file_id=file_uuid,
                                 name=sym_data.get("name", "unknown"),
-                                symbol_type=sym_data.get("symbol_type", "function"),
+                                symbol_type=stype,
                                 signature=sym_data.get("signature"),
                                 source_code=sym_data.get("source_code", ""),
                                 start_line=sym_data.get("start_line", 1),
                                 end_line=sym_data.get("end_line", 1)
                             )
-                            symbol_records_to_add.append(sym_record)
-                    except Exception as parse_err:
-                        print(f"Error parsing file {relative_path}: {parse_err}")
+                            symbols_to_add.append(sym_rec)
+                    except Exception:
+                        pass
 
-                # 3. Stage: embedding
-                job.stage = "embedding"
+                job.current_stage = "embedding"
+                job.progress = 60
                 await db.commit()
 
-                for sym in symbol_records_to_add[:20]:
+                for sym in symbols_to_add:
                     if sym.source_code:
                         try:
-                            emb = await self.embedding_service.generate_embedding(sym.source_code)
+                            emb = await self.embedder.generate_embedding(sym.source_code)
                             sym.embedding = emb
-                        except Exception as emb_err:
-                            print(f"Embedding error for symbol {sym.name}: {emb_err}")
+                        except Exception:
+                            pass
 
-                # 4. Stage: storage (Strict Database Transaction)
-                job.stage = "storage"
+                job.current_stage = "storing"
+                job.progress = 90
                 await db.commit()
 
                 async with db.begin():
-                    # Add new files and symbols (don't delete previous versions)
-                    for f in file_records_to_add:
+                    for f in files_to_add:
                         db.add(f)
-
-                    for s in symbol_records_to_add:
+                    for s in symbols_to_add:
                         db.add(s)
 
-                    repo_version.status = "active"
-                    # Set current_version_id only after successful indexing
-                    repo.current_version_id = repo_version.id
+                    now_utc = datetime.now(timezone.utc)
+                    ver.status = "active"
+                    ver.file_count = len(files_to_add)
+                    ver.symbol_count = len(symbols_to_add)
+                    ver.indexed_at = now_utc
+
+                    repo.current_version_id = ver.id
                     repo.status = "ready"
-                    repo.indexed_at = datetime.utcnow()
+                    repo.indexed_at = now_utc
 
                     job.status = "completed"
-                    job.stage = "completed"
-                    job.completed_at = datetime.utcnow()
+                    job.current_stage = "completed"
+                    job.progress = 100
+                    job.completed_at = now_utc
 
-            except Exception as pipeline_err:
+            except Exception as err:
                 await db.rollback()
-                job.status = "failed"
-                job.error_message = str(pipeline_err)
-                if repo_version:
-                    repo_version.status = "failed"
-                # Do NOT change current_version_id on failure
-                repo.status = "error"
+                stmt_job_err = select(IndexingJob).where(IndexingJob.id == job_uuid)
+                job_err = (await db.execute(stmt_job_err)).scalars().first()
+                if job_err:
+                    job_err.status = "failed"
+                    job_err.error_message = str(err)
+
+                if ver and ver.id:
+                    stmt_ver_err = select(RepositoryVersion).where(RepositoryVersion.id == ver.id)
+                    ver_err = (await db.execute(stmt_ver_err)).scalars().first()
+                    if ver_err:
+                        ver_err.status = "failed"
+                        ver_err.error_message = str(err)
+
+                stmt_repo_err = select(Repository).where(Repository.id == job.repository_id)
+                repo_err = (await db.execute(stmt_repo_err)).scalars().first()
+                if repo_err:
+                    if repo_err.current_version_id is not None:
+                        repo_err.status = "ready"
+                    else:
+                        repo_err.status = "error"
+
                 await db.commit()
             finally:
                 if repo_dir:
-                    self.git_service.cleanup(repo_dir)
-
+                    self.git.cleanup(repo_dir)
 
 indexing_service = IndexingService()

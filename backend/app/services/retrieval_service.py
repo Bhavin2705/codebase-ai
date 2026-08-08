@@ -1,7 +1,8 @@
 import re
-from typing import List, Dict, Any, Optional, Tuple
+import uuid
+from typing import List, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func, or_
 from sqlalchemy.orm import selectinload
 
 from app.models.repository import Repository
@@ -9,21 +10,9 @@ from app.models.file import File as FileModel
 from app.models.symbol import Symbol as SymbolModel
 from app.services.embedding_service import EmbeddingService
 
-
-def cosine_similarity(v1: List[float], v2: List[float]) -> float:
-    if not v1 or not v2 or len(v1) != len(v2):
-        return 0.0
-    dot_product = sum(a * b for a, b in zip(v1, v2))
-    norm1 = sum(a * a for a in v1) ** 0.5
-    norm2 = sum(b * b for b in v2) ** 0.5
-    if norm1 == 0 or norm2 == 0:
-        return 0.0
-    return dot_product / (norm1 * norm2)
-
-
 class RetrievalService:
     def __init__(self):
-        self.embedding_service = EmbeddingService()
+        self.embedder = EmbeddingService()
 
     async def retrieve_contexts(
         self,
@@ -32,23 +21,16 @@ class RetrievalService:
         db: AsyncSession,
         top_k: int = 5
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-        lowercase_question = question.strip().lower()
+        query_text = question.strip().lower()
 
-        # Retrieve repository details
         repo = None
         try:
-            import uuid
             repo_uuid = uuid.UUID(repository_id)
-            stmt_repo = select(Repository).where(Repository.id == repo_uuid)
-            repo = (await db.execute(stmt_repo)).scalars().first()
+            stmt = select(Repository).where(Repository.id == repo_uuid)
+            repo = (await db.execute(stmt)).scalars().first()
         except ValueError:
-            stmt_repo = select(Repository).where(Repository.name.ilike(f"%{repository_id}%"))
-            repo = (await db.execute(stmt_repo)).scalars().first()
-
-        if not repo:
-            # Fallback to initial repository if not found
-            stmt_repo = select(Repository)
-            repo = (await db.execute(stmt_repo)).scalars().first()
+            stmt = select(Repository).where(Repository.name.ilike(f"%{repository_id}%"))
+            repo = (await db.execute(stmt)).scalars().first()
 
         repo_meta = {
             "name": repo.name if repo else "Workspace",
@@ -56,111 +38,142 @@ class RetrievalService:
             "total_files": 0
         }
 
-        if not repo:
+        if not repo or not repo.current_version_id:
             return [], repo_meta
 
-        # Query files and symbols for the target repository through current version
-        if repo.current_version_id:
-            stmt_files = select(FileModel).options(selectinload(FileModel.symbols)).where(
-                FileModel.repository_version_id == repo.current_version_id
-            )
-            db_files = (await db.execute(stmt_files)).scalars().all()
-            repo_meta["total_files"] = len(db_files)
-        else:
-            # If no current version, return empty
-            db_files = []
-            repo_meta["total_files"] = 0
+        stmt_count = select(func.count(FileModel.id)).where(
+            FileModel.repository_version_id == repo.current_version_id
+        )
+        total_files = (await db.execute(stmt_count)).scalar() or 0
+        repo_meta["total_files"] = total_files
 
-        # Generate dense query embedding
-        query_vector = []
+        q_vec = []
         try:
-            query_vector = await self.embedding_service.generate_embedding(question)
-        except Exception as embed_err:
-            print(f"Embedding error during context retrieval: {embed_err}")
+            q_vec = await self.embedder.generate_embedding(question)
+        except Exception:
+            pass
 
-        raw_tokens = set(re.findall(r"[A-Za-z0-9_]+", lowercase_question))
-        stop_words = {"what", "how", "does", "the", "and", "for", "this", "repo", "repository", "workspace", "project", "where", "are", "code", "explain", "about", "is", "a", "an", "in", "of", "to"}
-        query_terms = [t for t in raw_tokens if t not in stop_words and len(t) >= 2]
+        tokens = set(re.findall(r"[A-Za-z0-9_]+", query_text))
+        stop = {"what", "how", "does", "the", "and", "for", "this", "repo", "repository", "workspace", "project", "where", "are", "code", "explain", "about", "is", "a", "an", "in", "of", "to"}
+        query_terms = [t for t in tokens if t not in stop and len(t) >= 2]
 
-        is_overview_query = any(phrase in lowercase_question for phrase in [
+        is_overview = any(p in query_text for p in [
             "what is this repo about", "repo about", "repository about", "overview", "what does this repo do",
             "architecture", "explain repo", "explain repository", "project structure", "readme",
             "workspace", "workspace about", "what is this workspace about", "project about", "explain project",
             "explain workspace", "what is this project about", "what does this project do", "summary", "about this"
         ])
 
-        scored_contexts: List[Dict[str, Any]] = []
+        candidates: Dict[uuid.UUID, Dict[str, Any]] = {}
 
-        for file_item in db_files:
-            file_path = file_item.path
-            content = file_item.content or ""
-            file_path_lower = file_path.lower()
-            content_lower = content.lower()
-            symbols = file_item.symbols or []
-
-            # 1. Lexical Scoring
-            lexical_score = 0
-            for term in query_terms:
-                if term in file_path_lower.split("/")[-1]:
-                    lexical_score += 40
-                elif term in file_path_lower:
-                    lexical_score += 15
-
-                if any(term in sym.name.lower() for sym in symbols):
-                    lexical_score += 25
-
-                if term in content_lower:
-                    lexical_score += min(content_lower.count(term), 5)
-
-            # 2. Vector Similarity Scoring
-            max_vector_score = 0.0
-            best_symbol = None
-
-            for sym in symbols:
-                if sym.embedding and query_vector:
-                    sim = cosine_similarity(query_vector, sym.embedding)
-                    if sim > max_vector_score:
-                        max_vector_score = sim
-                        best_symbol = sym
-
-            final_score = (max_vector_score * 100.0) + lexical_score
-
-            if final_score > 0 or is_overview_query:
-                lines = content.split("\n")
-                start_line = best_symbol.start_line if best_symbol else 1
-                end_line = best_symbol.end_line if best_symbol else min(len(lines), 150)
-                sym_name = best_symbol.name if best_symbol else file_path.split("/")[-1]
-
-                scored_contexts.append({
-                    "score": final_score,
-                    "context": {
-                        "name": sym_name,
-                        "file_path": file_path,
-                        "signature": best_symbol.signature if best_symbol and best_symbol.signature else f"file {file_path}",
-                        "start_line": start_line,
-                        "end_line": end_line,
-                        "source_code": best_symbol.source_code if (best_symbol and best_symbol.source_code) else content[:2500]
+        # 1. Database-side pgvector similarity ranking
+        if q_vec:
+            try:
+                cos_dist = SymbolModel.embedding.cosine_distance(q_vec)
+                stmt_vector = (
+                    select(SymbolModel, FileModel, cos_dist.label("dist"))
+                    .join(FileModel, SymbolModel.file_id == FileModel.id)
+                    .where(
+                        FileModel.repository_version_id == repo.current_version_id,
+                        SymbolModel.embedding.is_not(None)
+                    )
+                    .order_by(cos_dist)
+                    .limit(top_k * 4)
+                )
+                vec_rows = (await db.execute(stmt_vector)).all()
+                for sym, file_rec, dist in vec_rows:
+                    vec_score = max(0.0, 1.0 - float(dist)) if dist is not None else 0.0
+                    candidates[sym.id] = {
+                        "sym": sym,
+                        "file": file_rec,
+                        "vec_score": vec_score
                     }
-                })
+            except Exception:
+                pass
 
-        scored_contexts.sort(key=lambda item: item["score"], reverse=True)
-        max_limit = top_k if not is_overview_query else 4
-        contexts = [item["context"] for item in scored_contexts[:max_limit]]
+        # 2. Database-side lexical matching for query terms
+        if query_terms:
+            lex_conditions = []
+            for t in query_terms[:5]:
+                pattern = f"%{t}%"
+                lex_conditions.append(FileModel.path.ilike(pattern))
+                lex_conditions.append(SymbolModel.name.ilike(pattern))
 
-        if not contexts and db_files:
-            for file_item in db_files[:2]:
-                content = file_item.content or ""
-                lines = content.split("\n")
-                contexts.append({
-                    "name": file_item.path.split("/")[-1],
-                    "file_path": file_item.path,
-                    "signature": f"file {file_item.path}",
-                    "start_line": 1,
-                    "end_line": min(len(lines), 30),
-                    "source_code": content[:300]
-                })
+            stmt_lex = (
+                select(SymbolModel, FileModel)
+                .join(FileModel, SymbolModel.file_id == FileModel.id)
+                .where(
+                    FileModel.repository_version_id == repo.current_version_id,
+                    or_(*lex_conditions)
+                )
+                .limit(top_k * 4)
+            )
+            lex_rows = (await db.execute(stmt_lex)).all()
+            for sym, file_rec in lex_rows:
+                if sym.id not in candidates:
+                    candidates[sym.id] = {
+                        "sym": sym,
+                        "file": file_rec,
+                        "vec_score": 0.0
+                    }
+
+        # 3. Fallback candidate loading if no candidates match yet
+        if not candidates:
+            stmt_fallback = (
+                select(SymbolModel, FileModel)
+                .join(FileModel, SymbolModel.file_id == FileModel.id)
+                .where(FileModel.repository_version_id == repo.current_version_id)
+                .limit(top_k * 2)
+            )
+            fallback_rows = (await db.execute(stmt_fallback)).all()
+            for sym, file_rec in fallback_rows:
+                candidates[sym.id] = {
+                    "sym": sym,
+                    "file": file_rec,
+                    "vec_score": 0.0
+                }
+
+        # 4. Final hybrid scoring of candidates
+        scored = []
+        for cdata in candidates.values():
+            sym = cdata["sym"]
+            file_rec = cdata["file"]
+            vec_score = cdata["vec_score"]
+
+            file_path = file_rec.path
+            path_lower = file_path.lower()
+            sym_name_lower = sym.name.lower()
+
+            lex_score = 0
+            for term in query_terms:
+                if term in path_lower.split("/")[-1]:
+                    lex_score += 40
+                elif term in path_lower:
+                    lex_score += 15
+                if term in sym_name_lower:
+                    lex_score += 25
+
+            total_score = (vec_score * 100.0) + lex_score
+            lines = (file_rec.content or "").split("\n")
+            start_l = sym.start_line or 1
+            end_l = sym.end_line or min(len(lines), 150)
+
+            scored.append({
+                "score": total_score,
+                "context": {
+                    "name": sym.name,
+                    "file_path": file_path,
+                    "signature": sym.signature or f"file {file_path}",
+                    "start_line": start_l,
+                    "end_line": end_l,
+                    "source_code": sym.source_code or (file_rec.content or "")[:2500]
+                }
+            })
+
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        limit = top_k if not is_overview else 4
+        contexts = [x["context"] for x in scored[:limit]]
 
         return contexts, repo_meta
-
 
 retrieval_service = RetrievalService()

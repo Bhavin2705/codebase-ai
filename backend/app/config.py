@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "AI Codebase Knowledge Assistant"
@@ -15,10 +15,12 @@ class Settings(BaseSettings):
     NVIDIA_NIM_CHAT_MODEL: str = "meta/llama-3.1-70b-instruct"
     NVIDIA_NIM_EMBED_MODEL: str = "nvidia/nv-embedqa-e5-v5"
 
-    class Config:
-        case_sensitive = True
-        env_file = ".env"
-        extra = "ignore"
+    GITHUB_WEBHOOK_SECRET: str = ""
 
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore",
+        case_sensitive=True
+    )
 
 settings = Settings()

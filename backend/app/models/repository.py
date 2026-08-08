@@ -21,9 +21,9 @@ class Repository(Base):
     status: Mapped[str] = mapped_column(String(50), default="pending")
     current_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("repository_versions.id", ondelete="SET NULL"), nullable=True)
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, server_default=func.now(), nullable=False)
 
     chats: Mapped[List["Chat"]] = relationship("Chat", back_populates="repository", cascade="all, delete-orphan")
-    versions: Mapped[List["RepositoryVersion"]] = relationship("RepositoryVersion", back_populates="repository", cascade="all, delete-orphan")
+    versions: Mapped[List["RepositoryVersion"]] = relationship("RepositoryVersion", foreign_keys="[RepositoryVersion.repository_id]", back_populates="repository", cascade="all, delete-orphan")
     indexing_jobs: Mapped[List["IndexingJob"]] = relationship("IndexingJob", back_populates="repository", cascade="all, delete-orphan")
     current_version: Mapped["RepositoryVersion | None"] = relationship("RepositoryVersion", foreign_keys=[current_version_id], post_update=True)

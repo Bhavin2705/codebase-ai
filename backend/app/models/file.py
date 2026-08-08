@@ -20,7 +20,7 @@ class File(Base):
     language: Mapped[str] = mapped_column(String(50), nullable=False)
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, server_default=func.now(), nullable=False)
 
     repository_version: Mapped["RepositoryVersion"] = relationship("RepositoryVersion", back_populates="files")
     symbols: Mapped[List["Symbol"]] = relationship("Symbol", back_populates="file", cascade="all, delete-orphan")

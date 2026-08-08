@@ -3,8 +3,8 @@
 *.env
 backend/.env
 
-# Markdown files
-*.md
+# Markdown files (allow README.md)
+!README.md
 
 # Python
 __pycache__/
@@ -37,3 +37,4 @@ Thumbs.db
 backend/data/
 *.sqlite
 *.db
+.aider*

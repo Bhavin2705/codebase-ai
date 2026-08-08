@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, ConfigDict
 
 class RepoImportRequest(BaseModel):
     github_url: str
@@ -22,14 +22,15 @@ class RepoResponse(BaseModel):
     github_url: str
     language: str
     status: str
+    current_version_id: str | None = None
+    commit_sha: str | None = None
     indexed_at: datetime | None = None
     stats: RepoStats | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class RepoIndexResponse(BaseModel):
-    repository_id: str
+    job_id: str
     status: str
-    stats: RepoStats
-    stages: list[IndexStage]
+    stats: RepoStats | None = None
+    stages: list[IndexStage] = []

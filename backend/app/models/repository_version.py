@@ -24,8 +24,8 @@ class RepositoryVersion(Base):
     file_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     symbol_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, server_default=func.now(), nullable=False)
 
-    repository: Mapped["Repository"] = relationship("Repository", back_populates="versions")
+    repository: Mapped["Repository"] = relationship("Repository", foreign_keys=[repository_id], back_populates="versions")
     indexing_jobs: Mapped[List["IndexingJob"]] = relationship("IndexingJob", back_populates="repository_version", cascade="all, delete-orphan")
     files: Mapped[List["File"]] = relationship("File", back_populates="repository_version", cascade="all, delete-orphan")

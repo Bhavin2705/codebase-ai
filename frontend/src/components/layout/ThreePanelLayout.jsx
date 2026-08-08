@@ -24,22 +24,18 @@ export default function ThreePanelLayout({ selectedRepo }) {
   }, [repoId, currentRepoId, navigate]);
 
   useEffect(() => {
-    if (currentRepoId === 'repo-1') {
-      setConversations(MOCK_CONVERSATIONS);
-      setActiveCitation(MOCK_CONVERSATIONS[0].citations[0]);
-    } else {
-      const initialWelcomeMsg = {
-        id: `init-${currentRepoId}`,
-        repositoryId: currentRepoId,
-        question: `Repository Loaded: ${repoName}`,
-        answer: `Codebase indexed successfully! You can browse files in the Explorer or ask questions about architecture, functions, endpoints, or implementation details.`,
-        citations: [],
-        confidence: 'high'
-      };
-      setConversations([initialWelcomeMsg]);
-      setActiveCitation(null);
-    }
+    const initialWelcomeMessage = {
+      id: `init-${currentRepoId}`,
+      repositoryId: currentRepoId,
+      question: `Repository Loaded: ${repoName}`,
+      answer: `Codebase indexed successfully! You can browse files in the Explorer or ask questions about architecture, functions, endpoints, or implementation details.`,
+      citations: [],
+      confidence: 'high'
+    };
+    setConversations([initialWelcomeMessage]);
+    setActiveCitation(null);
   }, [currentRepoId, repoName]);
+
 
   const handleSelectCitation = (citation) => {
     setActiveCitation(citation);
