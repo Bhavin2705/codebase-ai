@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models.repository import Repository
+from app.models.repository_version import RepositoryVersion
 from app.models.file import File as FileModel
 from app.models.symbol import Symbol as SymbolModel
 from app.models.indexing_job import IndexingJob
@@ -192,12 +193,20 @@ async def import_repository(payload: RepoImportRequest, db: AsyncSession = Depen
 
 @router.get("", response_model=List[RepoResponse])
 async def list_repositories(db: AsyncSession = Depends(get_db)):
-    stmt = select(Repository).options(selectinload(Repository.files))
+    stmt = select(Repository)
     db_repos = (await db.execute(stmt)).scalars().all()
 
     result = []
     for repo in db_repos:
-        file_count = len(repo.files)
+        # Get file count from current version
+        file_count = 0
+        if repo.current_version_id:
+            stmt_files = select(FileModel).where(
+                FileModel.repository_version_id == repo.current_version_id
+            )
+            files = (await db.execute(stmt_files)).scalars().all()
+            file_count = len(files)
+        
         result.append({
             "id": str(repo.id),
             "name": repo.name,
@@ -226,7 +235,16 @@ async def _get_repo_by_id_or_name(repository_id: str, db: AsyncSession) -> Repos
 @router.get("/{repository_id}/tree")
 async def get_repository_tree(repository_id: str, db: AsyncSession = Depends(get_db)):
     repo = await _get_repo_by_id_or_name(repository_id, db)
-    file_paths = [file.path for file in repo.files]
+    
+    # Get files from current version
+    file_paths = []
+    if repo.current_version_id:
+        stmt_files = select(FileModel).where(
+            FileModel.repository_version_id == repo.current_version_id
+        )
+        files = (await db.execute(stmt_files)).scalars().all()
+        file_paths = [file.path for file in files]
+    
     return build_tree_from_paths(file_paths)
 
 @router.get("/{repository_id}/file")
