@@ -1,7 +1,9 @@
 import os
-import hashlib
+import logging
 from typing import List
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 class EmbeddingService:
     def __init__(self):
@@ -19,26 +21,21 @@ class EmbeddingService:
     def model(self) -> str:
         return os.getenv("NVIDIA_NIM_EMBED_MODEL") or getattr(settings, "NVIDIA_NIM_EMBED_MODEL", "nvidia/nv-embedqa-e5-v5")
 
-    def _fallback_vector(self, text: str) -> List[float]:
-        h = hashlib.sha256(text.encode("utf-8")).digest()
-        v = [(b / 255.0) - 0.5 for b in h]
-        repeats = (self.dim // len(v)) + 1
-        vec = (v * repeats)[:self.dim]
-        return vec
-
     async def generate_embedding(self, text: str) -> List[float]:
         if not self.api_key or self.api_key.startswith("your_"):
-            return self._fallback_vector(text)
+            logger.error("Embedding generation failed: NVIDIA_NIM_API_KEY is missing or unconfigured")
+            raise ValueError("NVIDIA_NIM_API_KEY is missing or unconfigured")
         try:
             from openai import AsyncOpenAI
             client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
-            res = await client.embeddings.create(
+            embedding_response = await client.embeddings.create(
                 input=[text[:2000]],
                 model=self.model
             )
-            emb = res.data[0].embedding
-            if len(emb) >= self.dim:
-                return emb[:self.dim]
-            return emb + [0.0] * (self.dim - len(emb))
-        except Exception:
-            return self._fallback_vector(text)
+            embedding_vector = embedding_response.data[0].embedding
+            if len(embedding_vector) >= self.dim:
+                return embedding_vector[:self.dim]
+            return embedding_vector + [0.0] * (self.dim - len(embedding_vector))
+        except Exception as error:
+            logger.error("Embedding provider API call failed: %s", error, exc_info=True)
+            raise RuntimeError(f"Embedding provider API call failed: {error}") from error

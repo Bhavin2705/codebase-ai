@@ -193,3 +193,67 @@ async def test_chat_invalid_repository_identifier_returns_404():
         assert res.status_code == 404
         data = res.json()
         assert "detail" in data
+
+@pytest.mark.anyio
+async def test_embedding_failure_fails_indexing_job():
+    import tempfile
+    import os
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        main_py_path = os.path.join(tmp_dir, "main.py")
+        with open(main_py_path, "w", encoding="utf-8") as f:
+            f.write("def sample_function():\n    return 42\n")
+
+        async with AsyncSessionLocal() as db:
+            repo_id = uuid.uuid4()
+            now = datetime.now(timezone.utc)
+
+            repo = Repository(
+                id=repo_id,
+                name="test-org/emb-fail-repo",
+                github_url=f"https://github.com/test-org/emb-fail-repo-{repo_id.hex[:6]}",
+                language="Python",
+                status="pending",
+                indexed_at=now
+            )
+            job_id = uuid.uuid4()
+            job = IndexingJob(
+                id=job_id,
+                repository_id=repo_id,
+                status="pending",
+                current_stage="cloning"
+            )
+            db.add(repo)
+            db.add(job)
+            await db.commit()
+
+        async def mock_fail_embedding(text):
+            raise RuntimeError("Simulated embedding provider failure")
+
+        test_commit_sha = uuid.uuid4().hex
+
+        with pytest.MonkeyPatch.context() as m:
+            m.setattr(indexing_service.git, "clone_repository", lambda url: tmp_dir)
+            m.setattr(indexing_service.git, "get_commit_sha", lambda dir: test_commit_sha)
+            m.setattr(indexing_service.git, "scan_files", lambda dir: [("main.py", main_py_path)])
+            m.setattr(indexing_service.embedder, "generate_embedding", mock_fail_embedding)
+            m.setattr(indexing_service.git, "cleanup", lambda dir: None)
+
+
+
+
+
+
+
+
+            await indexing_service.run_pipeline(str(job_id))
+
+        async with AsyncSessionLocal() as db:
+            res_job = (await db.execute(select(IndexingJob).where(IndexingJob.id == job_id))).scalars().first()
+            res_repo = (await db.execute(select(Repository).where(Repository.id == repo_id))).scalars().first()
+
+            assert res_job is not None
+            assert res_job.status == "failed"
+            assert "Embedding pipeline failed" in (res_job.error_message or "")
+            assert res_repo is not None
+            assert res_repo.status == "error"

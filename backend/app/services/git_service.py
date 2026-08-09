@@ -2,7 +2,10 @@ import os
 import shutil
 import tempfile
 import subprocess
+import logging
 from typing import List, Tuple
+
+logger = logging.getLogger(__name__)
 
 try:
     from git import Repo
@@ -25,14 +28,14 @@ class GitService:
             try:
                 git_repo = Repo(repo_dir)
                 return git_repo.head.commit.hexsha
-            except Exception:
-                pass
+            except Exception as git_err:
+                logger.debug("GitPython commit SHA resolution failed: %s", git_err)
         try:
             process_result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_dir, capture_output=True, text=True)
             if process_result.returncode == 0:
                 return process_result.stdout.strip()
-        except Exception:
-            pass
+        except Exception as proc_err:
+            logger.debug("subprocess git rev-parse HEAD failed: %s", proc_err)
         return "0000000000000000000000000000000000000000"
 
     def scan_files(self, repo_dir: str) -> List[Tuple[str, str]]:
@@ -58,7 +61,8 @@ class GitService:
                 if diff_item.b_path:
                     changed_paths.append(diff_item.b_path.replace("\\", "/"))
             return changed_paths
-        except Exception:
+        except Exception as diff_err:
+            logger.warning("Failed to determine changed files between HEAD and %s: %s", base_sha, diff_err)
             return []
 
     def cleanup(self, repo_dir: str):

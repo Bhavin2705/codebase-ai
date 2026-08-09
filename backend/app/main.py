@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -9,14 +10,37 @@ from app.database import engine, Base
 
 import app.models
 
+logger = logging.getLogger(__name__)
+
+
+def get_cors_origins() -> list[str]:
+    raw_url = getattr(settings, "FRONTEND_URL", "").strip()
+    configured_origins = []
+    if raw_url:
+        for origin in raw_url.split(","):
+            cleaned = origin.strip().rstrip("/")
+            if cleaned and cleaned not in configured_origins:
+                configured_origins.append(cleaned)
+
+    default_origins = [
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "https://codebase-ai-nine.vercel.app",
+    ]
+    for origin in default_origins:
+        if origin not in configured_origins:
+            configured_origins.append(origin)
+    return configured_origins
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-    except Exception:
-        pass
+    except Exception as err:
+        logger.error("Database table initialization failed: %s", err, exc_info=True)
     yield
 
 
@@ -29,7 +53,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=get_cors_origins(),
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

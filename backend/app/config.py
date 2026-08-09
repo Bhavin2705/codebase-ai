@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     NVIDIA_NIM_CHAT_MODEL: str = "meta/llama-3.1-70b-instruct"
     NVIDIA_NIM_EMBED_MODEL: str = "nvidia/nv-embedqa-e5-v5"
 
+    FRONTEND_URL: str = "http://localhost:5173"
     GITHUB_WEBHOOK_SECRET: str = ""
 
     model_config = SettingsConfigDict(

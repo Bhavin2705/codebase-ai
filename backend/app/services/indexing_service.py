@@ -1,6 +1,7 @@
 import os
 import uuid
 import hashlib
+import logging
 from datetime import datetime
 from typing import List, Dict, Any, Tuple
 from sqlalchemy import select
@@ -15,6 +16,8 @@ from app.models.indexing_job import IndexingJob
 from app.services.git_service import GitService, detect_language
 from app.services.parser_service import CodeParserService
 from app.services.embedding_service import EmbeddingService
+
+logger = logging.getLogger(__name__)
 
 class IndexingService:
     def __init__(self):
@@ -111,8 +114,8 @@ class IndexingService:
 
                 for rel_path, abs_path in file_pairs:
                     try:
-                        with open(abs_path, "r", encoding="utf-8", errors="ignore") as fh:
-                            code = fh.read()
+                        with open(abs_path, "r", encoding="utf-8", errors="ignore") as file_handle:
+                            code = file_handle.read()
 
                         ext = os.path.splitext(rel_path)[1].lower()
                         chash = hashlib.sha256(code.encode("utf-8")).hexdigest()
@@ -147,30 +150,36 @@ class IndexingService:
                                 end_line=sym_data.get("end_line", 1)
                             )
                             symbols_to_add.append(sym_rec)
-                    except Exception:
-                        pass
+                    except Exception as file_err:
+                        logger.warning("Failed to parse file %s: %s", rel_path, file_err)
 
                 job.current_stage = "embedding"
                 job.progress = 60
                 await db.commit()
 
-                for sym in symbols_to_add:
-                    if sym.source_code:
-                        try:
-                            emb = await self.embedder.generate_embedding(sym.source_code)
-                            sym.embedding = emb
-                        except Exception:
-                            pass
+                symbols_with_code = [sym for sym in symbols_to_add if sym.source_code]
+                embedding_failures = 0
+
+                for sym in symbols_with_code:
+                    try:
+                        emb = await self.embedder.generate_embedding(sym.source_code)
+                        sym.embedding = emb
+                    except Exception as emb_err:
+                        embedding_failures += 1
+                        logger.error("Failed to generate embedding for symbol %s: %s", sym.name, emb_err)
+
+                if symbols_with_code and embedding_failures == len(symbols_with_code):
+                    raise RuntimeError(f"Embedding pipeline failed for all {len(symbols_with_code)} symbols")
 
                 job.current_stage = "storing"
                 job.progress = 90
                 await db.commit()
 
                 async with db.begin():
-                    for f in files_to_add:
-                        db.add(f)
-                    for s in symbols_to_add:
-                        db.add(s)
+                    for file_rec in files_to_add:
+                        db.add(file_rec)
+                    for symbol_rec in symbols_to_add:
+                        db.add(symbol_rec)
 
                     now_utc = datetime.now(timezone.utc)
                     ver.status = "active"
@@ -188,6 +197,7 @@ class IndexingService:
                     job.completed_at = now_utc
 
             except Exception as err:
+                logger.error("Repository indexing pipeline failed for job %s: %s", job_id_str, err, exc_info=True)
                 await db.rollback()
                 stmt_job_err = select(IndexingJob).where(IndexingJob.id == job_uuid)
                 job_err = (await db.execute(stmt_job_err)).scalars().first()
