@@ -21,17 +21,20 @@ class EmbeddingService:
     def model(self) -> str:
         return os.getenv("NVIDIA_NIM_EMBED_MODEL") or getattr(settings, "NVIDIA_NIM_EMBED_MODEL", "nvidia/nv-embedqa-e5-v5")
 
-    async def generate_embedding(self, text: str) -> List[float]:
+    async def generate_embedding(self, text: str, input_type: str = "passage") -> List[float]:
         if not self.api_key or self.api_key.startswith("your_"):
             logger.error("Embedding generation failed: NVIDIA_NIM_API_KEY is missing or unconfigured")
             raise ValueError("NVIDIA_NIM_API_KEY is missing or unconfigured")
         try:
             from openai import AsyncOpenAI
             client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
-            embedding_response = await client.embeddings.create(
-                input=[text[:2000]],
-                model=self.model
-            )
+            kwargs = {
+                "input": [text[:500]],
+                "model": self.model,
+            }
+            if "nvidia" in self.model.lower():
+                kwargs["extra_body"] = {"input_type": input_type}
+            embedding_response = await client.embeddings.create(**kwargs)
             embedding_vector = embedding_response.data[0].embedding
             if len(embedding_vector) >= self.dim:
                 return embedding_vector[:self.dim]
