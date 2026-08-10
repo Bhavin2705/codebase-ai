@@ -49,19 +49,25 @@ class RetrievalService:
 
         q_vec = []
         try:
-            q_vec = await self.embedder.generate_embedding(question)
+            q_vec = await self.embedder.generate_embedding(question, input_type="query")
         except Exception:
             pass
 
         tokens = set(re.findall(r"[A-Za-z0-9_]+", query_text))
-        stop = {"what", "how", "does", "the", "and", "for", "this", "repo", "repository", "workspace", "project", "where", "are", "code", "explain", "about", "is", "a", "an", "in", "of", "to"}
+        stop = {
+            "what", "how", "does", "the", "and", "for", "this", "repo", "repository",
+            "workspace", "project", "where", "are", "code", "explain", "about", "is",
+            "a", "an", "in", "of", "to", "me", "when", "asks", "keep", "your", "response",
+            "precise", "tell", "show", "can", "you", "please"
+        }
         query_terms = [t for t in tokens if t not in stop and len(t) >= 2]
 
         is_overview = any(p in query_text for p in [
             "what is this repo about", "repo about", "repository about", "overview", "what does this repo do",
             "architecture", "explain repo", "explain repository", "project structure", "readme",
             "workspace", "workspace about", "what is this workspace about", "project about", "explain project",
-            "explain workspace", "what is this project about", "what does this project do", "summary", "about this"
+            "explain workspace", "what is this project about", "what does this project do", "summary", "about this",
+            "flow of request", "request flow", "flow of the request", "how request works", "request processing"
         ])
 
         candidates: Dict[uuid.UUID, Dict[str, Any]] = {}
@@ -152,6 +158,10 @@ class RetrievalService:
                     lex_score += 15
                 if term in sym_name_lower:
                     lex_score += 25
+
+            # Heavily penalize dummy/test files so real source code is selected first
+            if "dummy" in path_lower or "test_assets" in path_lower or "dummy_assets" in path_lower:
+                lex_score -= 200
 
             total_score = (vec_score * 100.0) + lex_score
             lines = (file_rec.content or "").split("\n")
