@@ -4,43 +4,28 @@ import Header from './components/layout/Header';
 import ThreePanelLayout from './components/layout/ThreePanelLayout';
 import RepoOverview from './components/overview/RepoOverview';
 import RepoImportModal from './components/import/RepoImportModal';
-import { MOCK_REPOSITORIES } from './data/mockData';
 import { API_BASE_URL } from './config';
 
 export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Helper to deduplicate repositories by name
-  const deduplicateRepos = (list) => {
-    if (!Array.isArray(list)) return MOCK_REPOSITORIES;
-    const map = new Map();
-    list.forEach((repo) => {
-      if (repo && repo.name && !map.has(repo.name)) {
-        map.set(repo.name, repo);
-      }
-    });
-    return Array.from(map.values());
-  };
-
-  // Instant local hydration from localStorage
   const [repositories, setRepositories] = useState(() => {
     try {
       const cached = localStorage.getItem('app_repositories');
-      return cached ? deduplicateRepos(JSON.parse(cached)) : MOCK_REPOSITORIES;
+      return cached ? JSON.parse(cached) : [];
     } catch {
-      return MOCK_REPOSITORIES;
+      return [];
     }
   });
 
   const [selectedRepo, setSelectedRepo] = useState(() => {
     try {
       const cachedId = localStorage.getItem('app_selected_repo_id');
-      const cachedList = deduplicateRepos(JSON.parse(localStorage.getItem('app_repositories') || '[]'));
-      const found = cachedList.find((r) => r.id === cachedId);
-      return found || cachedList[0] || MOCK_REPOSITORIES[0];
+      const cachedList = JSON.parse(localStorage.getItem('app_repositories') || '[]');
+      return cachedList.find((r) => r.id === cachedId) || cachedList[0] || null;
     } catch {
-      return MOCK_REPOSITORIES[0];
+      return null;
     }
   });
 
@@ -54,7 +39,7 @@ export default function App() {
   }, [repositories]);
 
   useEffect(() => {
-    if (selectedRepo && selectedRepo.id) {
+    if (selectedRepo?.id) {
       try {
         localStorage.setItem('app_selected_repo_id', selectedRepo.id);
       } catch {}
@@ -67,24 +52,21 @@ export default function App() {
       const urlRepoId = location.pathname.split('/workspace/')[1];
       if (urlRepoId && urlRepoId !== selectedRepo?.id) {
         const found = repositories.find((r) => r.id === urlRepoId);
-        if (found) {
-          setSelectedRepo(found);
-        }
+        if (found) setSelectedRepo(found);
       }
     }
   }, [location.pathname, repositories, selectedRepo]);
 
-  // Fetch updated list from backend asynchronously
+  // Fetch repositories from live API
   useEffect(() => {
     fetch(`${API_BASE_URL}/repositories`)
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
-          const uniqueData = deduplicateRepos(data);
-          setRepositories(uniqueData);
+          setRepositories(data);
           setSelectedRepo((prev) => {
-            const found = uniqueData.find((r) => r.id === prev?.id || r.name === prev?.name);
-            return found || uniqueData[0];
+            const found = data.find((r) => r.id === prev?.id || r.name === prev?.name);
+            return found || data[0];
           });
         }
       })

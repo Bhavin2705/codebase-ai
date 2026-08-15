@@ -14,6 +14,12 @@ try:
 except ImportError:
     HAS_JS_TREE_SITTER = False
 
+try:
+    import tree_sitter_typescript as tsts
+    HAS_TS_TREE_SITTER = True
+except ImportError:
+    HAS_TS_TREE_SITTER = False
+
 class CodeParserService:
     def __init__(self):
         self.parsers = {}
@@ -30,8 +36,16 @@ class CodeParserService:
                 self.parsers['javascript'] = js_parser
                 self.parsers['js'] = js_parser
                 self.parsers['jsx'] = js_parser
-                self.parsers['ts'] = js_parser
-                self.parsers['tsx'] = js_parser
+            except Exception:
+                pass
+
+        if HAS_TS_TREE_SITTER:
+            try:
+                ts_parser = Parser(Language(tsts.language_typescript()))
+                tsx_parser = Parser(Language(tsts.language_tsx()))
+                self.parsers['typescript'] = ts_parser
+                self.parsers['ts'] = ts_parser
+                self.parsers['tsx'] = tsx_parser
             except Exception:
                 pass
 
@@ -39,8 +53,12 @@ class CodeParserService:
         target_language = language.lower().strip('.')
         if target_language not in self.parsers:
             # Map extensions
-            if target_language in ('js', 'jsx', 'ts', 'tsx', 'javascript', 'typescript'):
+            if target_language in ('js', 'jsx', 'javascript'):
                 target_language = 'javascript' if 'javascript' in self.parsers else target_language
+            elif target_language in ('ts', 'typescript'):
+                target_language = 'typescript' if 'typescript' in self.parsers else ('javascript' if 'javascript' in self.parsers else target_language)
+            elif target_language == 'tsx':
+                target_language = 'tsx' if 'tsx' in self.parsers else ('javascript' if 'javascript' in self.parsers else target_language)
 
         if target_language not in self.parsers:
             return self._fallback_parse(file_path, code_content, target_language)
@@ -54,12 +72,15 @@ class CodeParserService:
             self._extract_java_symbols(root_node, code_content, extracted_symbols)
         elif target_language == 'python':
             self._extract_python_symbols(root_node, code_content, extracted_symbols)
-        elif target_language in ('javascript', 'js', 'jsx', 'ts', 'tsx'):
+        elif target_language in ('javascript', 'js', 'jsx', 'ts', 'tsx', 'typescript'):
             self._extract_js_symbols(root_node, code_content, extracted_symbols)
 
         return extracted_symbols if extracted_symbols else self._fallback_parse(file_path, code_content, target_language)
 
-    def _extract_java_symbols(self, ast_node: Any, source_code: str, extracted_symbols: list):
+    def _extract_java_symbols(self, ast_node: Any, source_code: str, extracted_symbols: list, depth: int = 0, max_depth: int = 50):
+        if depth > max_depth:
+            return
+
         if ast_node.type in ("class_declaration", "interface_declaration"):
             name_node = ast_node.child_by_field_name("name")
             name = name_node.text.decode("utf8") if name_node else "UnknownClass"
@@ -85,9 +106,12 @@ class CodeParserService:
             })
 
         for child_node in ast_node.children:
-            self._extract_java_symbols(child_node, source_code, extracted_symbols)
+            self._extract_java_symbols(child_node, source_code, extracted_symbols, depth + 1, max_depth)
 
-    def _extract_python_symbols(self, ast_node: Any, source_code: str, extracted_symbols: list):
+    def _extract_python_symbols(self, ast_node: Any, source_code: str, extracted_symbols: list, depth: int = 0, max_depth: int = 50):
+        if depth > max_depth:
+            return
+
         if ast_node.type == "class_definition":
             name_node = ast_node.child_by_field_name("name")
             name = name_node.text.decode("utf8") if name_node else "UnknownClass"
@@ -113,9 +137,12 @@ class CodeParserService:
             })
 
         for child_node in ast_node.children:
-            self._extract_python_symbols(child_node, source_code, extracted_symbols)
+            self._extract_python_symbols(child_node, source_code, extracted_symbols, depth + 1, max_depth)
 
-    def _extract_js_symbols(self, ast_node: Any, source_code: str, extracted_symbols: list):
+    def _extract_js_symbols(self, ast_node: Any, source_code: str, extracted_symbols: list, depth: int = 0, max_depth: int = 50):
+        if depth > max_depth:
+            return
+
         snippet_text = source_code[ast_node.start_byte:ast_node.end_byte]
 
         if ast_node.type in ("function_declaration", "generator_function_declaration"):
@@ -192,7 +219,7 @@ class CodeParserService:
                         })
 
         for child_node in ast_node.children:
-            self._extract_js_symbols(child_node, source_code, extracted_symbols)
+            self._extract_js_symbols(child_node, source_code, extracted_symbols, depth + 1, max_depth)
 
     def _fallback_parse(self, file_path: str, code_content: str, target_language: str) -> list[dict[str, Any]]:
         import re

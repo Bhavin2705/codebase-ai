@@ -1,46 +1,32 @@
 import React, { useState, useEffect } from 'react';
-import { Folder, FileCode, FileText, HelpCircle } from 'lucide-react';
-import { MOCK_FILE_TREE } from '../../data/mockData';
+import { Folder, FileCode, FileText } from 'lucide-react';
 import { API_BASE_URL } from '../../config';
 
 export default function NavPanel({ selectedRepo, onSelectFile }) {
-  const repoId = selectedRepo ? selectedRepo.id : 'repo-1';
-  const isDefaultRepo = repoId === 'repo-1';
-  
-  const getInitialTree = () => {
-    if (selectedRepo?.file_tree && selectedRepo.file_tree.length > 0) return selectedRepo.file_tree;
-    if (selectedRepo?.fileTree && selectedRepo.fileTree.length > 0) return selectedRepo.fileTree;
-    return isDefaultRepo ? MOCK_FILE_TREE : [];
-  };
-
-  const [tree, setTree] = useState(getInitialTree);
+  const repoId = selectedRepo?.id;
+  const [tree, setTree] = useState([]);
 
   useEffect(() => {
-    const existing = selectedRepo?.file_tree || selectedRepo?.fileTree;
-    if (existing && existing.length > 0) {
-      setTree(existing);
+    if (!repoId) {
+      setTree([]);
+      return;
     }
 
-    if (!repoId) return;
-
     fetch(`${API_BASE_URL}/repositories/${encodeURIComponent(repoId)}/tree`)
-      .then((res) => (res.ok ? res.json() : null))
+      .then((res) => (res.ok ? res.json() : []))
       .then((data) => {
-        if (Array.isArray(data) && data.length > 0) {
+        if (Array.isArray(data)) {
           setTree(data);
-        } else if (!existing || existing.length === 0) {
-          setTree(isDefaultRepo ? MOCK_FILE_TREE : []);
         }
       })
       .catch((err) => {
         console.error('Failed to fetch repo tree:', err);
-        if (!existing || existing.length === 0) {
-          setTree(isDefaultRepo ? MOCK_FILE_TREE : []);
-        }
+        setTree([]);
       });
-  }, [repoId, selectedRepo, isDefaultRepo]);
+  }, [repoId]);
 
   const renderTree = (nodes) => {
+    if (!Array.isArray(nodes)) return null;
     return nodes.map((node, i) => {
       const isDir = node.type === 'dir' || node.type === 'folder' || Boolean(node.children);
       const name = node.name || (node.path ? node.path.split('/').pop() : 'folder');

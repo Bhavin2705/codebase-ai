@@ -4,19 +4,26 @@ import { ArrowRight, HelpCircle } from 'lucide-react';
 
 export default function RepoOverview({ repo, onSelectQuestion }) {
   const navigate = useNavigate();
-  const targetRepoId = repo ? repo.id : 'repo-1';
 
   const handleOpenWorkspace = () => {
-    navigate(`/workspace/${targetRepoId}`);
+    if (repo?.id) {
+      navigate(`/workspace/${repo.id}`);
+    } else {
+      navigate('/workspace');
+    }
   };
 
   const handleQuestionClick = (q) => {
     if (onSelectQuestion) onSelectQuestion(q);
-    navigate(`/workspace/${targetRepoId}`);
+    if (repo?.id) {
+      navigate(`/workspace/${repo.id}`);
+    } else {
+      navigate('/workspace');
+    }
   };
 
   const getStarterQuestions = () => {
-    const lang = repo && repo.language ? repo.language.toLowerCase() : '';
+    const lang = repo?.language ? repo.language.toLowerCase() : '';
 
     if (lang.includes('python')) {
       return [
@@ -51,16 +58,31 @@ export default function RepoOverview({ repo, onSelectQuestion }) {
 
   const questions = getStarterQuestions();
 
+  if (!repo) {
+    return (
+      <div className="overview-container">
+        <div className="overview-card" style={{ textAlign: 'center', padding: '40px 20px' }}>
+          <h1 style={{ fontSize: '18px', fontWeight: 600, color: 'var(--text-main)' }}>
+            No Repository Selected
+          </h1>
+          <p style={{ color: 'var(--text-subtle)', fontSize: '13px', marginTop: '8px' }}>
+            Import a GitHub repository using the header button to start indexing and querying source code.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="overview-container">
       <div className="overview-card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h1 style={{ fontSize: '18px', fontWeight: 600, color: 'var(--text-main)', letterSpacing: '-0.2px' }}>
-              {repo ? repo.name : 'spring-projects/spring-petclinic'}
+              {repo.name}
             </h1>
             <p style={{ color: 'var(--text-subtle)', fontSize: '12px', marginTop: '2px', fontFamily: 'var(--font-mono)' }}>
-              {repo ? (repo.github_url || repo.url) : 'https://github.com/spring-projects/spring-petclinic'}
+              {repo.github_url || repo.url || ''}
             </p>
           </div>
           <button className="btn btn-primary" onClick={handleOpenWorkspace} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
@@ -79,42 +101,47 @@ export default function RepoOverview({ repo, onSelectQuestion }) {
         }}>
           <div>
             <div style={{ fontSize: '10px', color: 'var(--text-subtle)', letterSpacing: '0.5px' }}>PRIMARY LANGUAGE</div>
-            <div className="stat-metric">{repo ? repo.language : 'Java / Spring Boot'}</div>
+            <div className="stat-metric">{repo.language || 'Multi-Language'}</div>
           </div>
           <div>
             <div style={{ fontSize: '10px', color: 'var(--text-subtle)', letterSpacing: '0.5px' }}>INDEXED FILES</div>
-            <div className="stat-metric">{repo && repo.stats ? repo.stats.files : 42} Files</div>
+            <div className="stat-metric">{repo.stats?.files ?? 0} Files</div>
           </div>
           <div>
             <div style={{ fontSize: '10px', color: 'var(--text-subtle)', letterSpacing: '0.5px' }}>PARSED SYMBOLS</div>
-            <div className="stat-metric">{repo && repo.stats ? repo.stats.classes : 128} Symbols</div>
+            <div className="stat-metric">{repo.stats?.classes ?? 0} Symbols</div>
           </div>
           <div>
-            <div style={{ fontSize: '10px', color: 'var(--text-subtle)', letterSpacing: '0.5px' }}>STACK SUPPORT</div>
+            <div style={{ fontSize: '10px', color: 'var(--text-subtle)', letterSpacing: '0.5px' }}>STATUS</div>
             <div className="stat-metric" style={{ fontSize: '11px', color: 'var(--accent-cyan)' }}>
-              {repo ? repo.language : 'Multi-Language'}
+              {repo.status || 'ready'}
             </div>
           </div>
         </div>
       </div>
 
-      <div className="overview-card">
-        <h3 style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-main)' }}>
-          Suggested Starter Questions for {repo ? repo.name.split('/').pop() : 'Repository'}
-        </h3>
-        <p style={{ fontSize: '11px', color: 'var(--text-subtle)', marginTop: '2px' }}>
-          Click a question to launch RAG semantic search and evidence code retrieval:
-        </p>
-
-        <div className="questions-grid">
+      <div style={{ marginTop: '24px' }}>
+        <h2 style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <HelpCircle size={16} style={{ color: 'var(--accent-cyan)' }} />
+          <span>Starter Questions</span>
+        </h2>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
           {questions.map((q, idx) => (
             <div
               key={idx}
-              className="question-card"
+              className="card-hover"
               onClick={() => handleQuestionClick(q)}
+              style={{
+                backgroundColor: 'var(--bg-panel)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '6px',
+                padding: '14px',
+                cursor: 'pointer'
+              }}
             >
-              <HelpCircle size={14} style={{ color: 'var(--accent-cyan)', flexShrink: 0, marginTop: '2px' }} />
-              <span style={{ lineHeight: '1.4' }}>{q}</span>
+              <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-main)' }}>
+                {q}
+              </div>
             </div>
           ))}
         </div>

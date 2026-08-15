@@ -5,8 +5,11 @@ from app.main import app
 from app.services.llm_service import LLMService
 from app.services.embedding_service import EmbeddingService
 
+from app.config import settings
+
 @pytest.fixture(autouse=True)
 def mock_external_services(monkeypatch):
+    monkeypatch.setattr(settings, "API_ACCESS_KEY", "")
     async def mock_generate_rag_response(question, contexts, repo_meta=None):
         citations = []
         for idx, ctx in enumerate(contexts):

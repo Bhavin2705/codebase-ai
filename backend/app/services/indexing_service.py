@@ -101,12 +101,6 @@ class IndexingService:
                 file_pairs = self.git.scan_files(repo_dir)
                 repo.language = detect_language(file_pairs)
 
-                old_hashes: Dict[str, str] = {}
-                if repo.current_version_id:
-                    stmt_old = select(FileModel).where(FileModel.repository_version_id == repo.current_version_id)
-                    old_files = (await db.execute(stmt_old)).scalars().all()
-                    old_hashes = {f.path: f.content_hash for f in old_files if f.content_hash}
-
                 files_to_add = []
                 symbols_to_add = []
                 class_cnt = 0

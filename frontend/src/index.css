@@ -654,3 +654,14 @@ body {
   border-radius: 4px;
   color: var(--text-muted);
 }
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}

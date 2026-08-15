@@ -50,24 +50,19 @@ class GitService:
                     file_pairs.append((relative_path, absolute_path))
         return file_pairs
 
-    def get_changed_files(self, repo_dir: str, base_sha: str) -> List[str]:
-        if not HAS_GIT or not base_sha:
-            return []
-        try:
-            git_repo = Repo(repo_dir)
-            diff_index = git_repo.head.commit.diff(base_sha)
-            changed_paths = []
-            for diff_item in diff_index:
-                if diff_item.b_path:
-                    changed_paths.append(diff_item.b_path.replace("\\", "/"))
-            return changed_paths
-        except Exception as diff_err:
-            logger.warning("Failed to determine changed files between HEAD and %s: %s", base_sha, diff_err)
-            return []
-
     def cleanup(self, repo_dir: str):
         if os.path.exists(repo_dir):
-            shutil.rmtree(repo_dir, ignore_errors=True)
+            def _remove_readonly(func, path, exc_info):
+                import stat
+                try:
+                    os.chmod(path, stat.S_IWRITE)
+                    func(path)
+                except Exception:
+                    pass
+            try:
+                shutil.rmtree(repo_dir, onerror=_remove_readonly)
+            except Exception as err:
+                logger.debug("Failed to clean up cloned directory %s: %s", repo_dir, err)
 
 def detect_language(file_pairs: List[Tuple[str, str]]) -> str:
     extension_counts: dict[str, int] = {}

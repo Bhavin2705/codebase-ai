@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
+from app.config import verify_api_key
 from app.models.repository import Repository
 from app.models.chat import Chat as ChatModel
 from app.schemas.chat import ChatRequest, ChatResponse, CitationItem
@@ -27,7 +28,7 @@ async def _resolve_repository(repo_id_input: str, db: AsyncSession) -> Repositor
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Repository not found: {repo_id_input}")
     return repo
 
-@router.post("", response_model=ChatResponse)
+@router.post("", response_model=ChatResponse, dependencies=[Depends(verify_api_key)])
 async def chat_query(payload: ChatRequest, db: AsyncSession = Depends(get_db)):
     start_time = time.time()
     raw_repo_id = payload.repository_id or "repo-1"

@@ -176,6 +176,8 @@ export default function ChatPanel({ conversations, onSelectCitation, onAskQuesti
 
     return segments.map((seg, idx) => {
       if (seg.type === 'cite') {
+        const normalizedPath = seg.filePath.replace(/\\/g, '/');
+        const fileName = normalizedPath.split('/').pop();
         return (
           <a
             key={`inline-cite-${idx}`}
@@ -184,8 +186,8 @@ export default function ChatPanel({ conversations, onSelectCitation, onAskQuesti
               e.preventDefault();
               onSelectCitation({
                 id: `cite-${seg.index}`,
-                label: `${seg.filePath.split('/').pop()}:${seg.startLine}-${seg.endLine}`,
-                filePath: seg.filePath,
+                label: `${fileName}:${seg.startLine}-${seg.endLine}`,
+                filePath: normalizedPath,
                 startLine: seg.startLine,
                 endLine: seg.endLine,
                 symbol: seg.labelText
@@ -199,68 +201,97 @@ export default function ChatPanel({ conversations, onSelectCitation, onAskQuesti
 
       // Parse markdown block elements (#, ##, ### headers, **bold**, - lists, code blocks)
       const lines = seg.content.split('\n');
+      const renderedElements = [];
       let inCodeBlock = false;
       let codeBuffer = [];
 
+      lines.forEach((rawLine, lineIdx) => {
+        const line = rawLine.trim();
+
+        if (line.startsWith('```')) {
+          if (inCodeBlock) {
+            const codeText = codeBuffer.join('\n');
+            codeBuffer = [];
+            inCodeBlock = false;
+            renderedElements.push(
+              <pre key={`code-${lineIdx}`} style={{
+                background: 'rgba(15, 23, 42, 0.6)',
+                padding: '10px 14px',
+                borderRadius: '6px',
+                border: '1px solid var(--border-color)',
+                overflowX: 'auto',
+                fontSize: '12px',
+                fontFamily: 'var(--font-mono)',
+                margin: '8px 0'
+              }}>
+                <code>{codeText}</code>
+              </pre>
+            );
+            return;
+          } else {
+            inCodeBlock = true;
+            return;
+          }
+        }
+
+        if (inCodeBlock) {
+          codeBuffer.push(rawLine);
+          return;
+        }
+
+        if (line === '.' || line === '```') return;
+
+        if (line.startsWith('# ')) {
+          renderedElements.push(<h2 key={lineIdx} style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-main)', marginTop: '8px', marginBottom: '4px' }}>{parseInlineMarkdown(line.replace('# ', ''))}</h2>);
+          return;
+        }
+        if (line.startsWith('## ')) {
+          renderedElements.push(<h3 key={lineIdx} style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-main)', marginTop: '8px', marginBottom: '4px' }}>{parseInlineMarkdown(line.replace('## ', ''))}</h3>);
+          return;
+        }
+        if (line.startsWith('### ')) {
+          renderedElements.push(<h3 key={lineIdx} style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-main)', marginTop: '8px', marginBottom: '4px' }}>{parseInlineMarkdown(line.replace('### ', ''))}</h3>);
+          return;
+        }
+        if (line.startsWith('- ') || line.startsWith('* ')) {
+          renderedElements.push(<li key={lineIdx} style={{ marginLeft: '16px', marginBottom: '3px' }}>{parseInlineMarkdown(line.substring(2))}</li>);
+          return;
+        }
+
+        if (!line) {
+          renderedElements.push(<br key={lineIdx} />);
+          return;
+        }
+
+        renderedElements.push(
+          <React.Fragment key={lineIdx}>
+            {parseInlineMarkdown(rawLine)}
+            {lineIdx < lines.length - 1 && <br />}
+          </React.Fragment>
+        );
+      });
+
+      // Flush any trailing unclosed code block
+      if (inCodeBlock && codeBuffer.length > 0) {
+        renderedElements.push(
+          <pre key="unclosed-code-block" style={{
+            background: 'rgba(15, 23, 42, 0.6)',
+            padding: '10px 14px',
+            borderRadius: '6px',
+            border: '1px solid var(--border-color)',
+            overflowX: 'auto',
+            fontSize: '12px',
+            fontFamily: 'var(--font-mono)',
+            margin: '8px 0'
+          }}>
+            <code>{codeBuffer.join('\n')}</code>
+          </pre>
+        );
+      }
+
       return (
         <span key={`text-block-${idx}`}>
-          {lines.map((rawLine, lineIdx) => {
-            const line = rawLine.trim();
-
-            if (line.startsWith('```')) {
-              if (inCodeBlock) {
-                const codeText = codeBuffer.join('\n');
-                codeBuffer = [];
-                inCodeBlock = false;
-                return (
-                  <pre key={`code-${lineIdx}`} style={{
-                    background: 'rgba(15, 23, 42, 0.6)',
-                    padding: '10px 14px',
-                    borderRadius: '6px',
-                    border: '1px solid var(--border-color)',
-                    overflowX: 'auto',
-                    fontSize: '12px',
-                    fontFamily: 'var(--font-mono)',
-                    margin: '8px 0'
-                  }}>
-                    <code>{codeText}</code>
-                  </pre>
-                );
-              } else {
-                inCodeBlock = true;
-                return null;
-              }
-            }
-
-            if (inCodeBlock) {
-              codeBuffer.push(rawLine);
-              return null;
-            }
-
-            if (line === '.' || line === '```') return null;
-
-            if (line.startsWith('# ')) {
-              return <h2 key={lineIdx} style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-main)', marginTop: '8px', marginBottom: '4px' }}>{parseInlineMarkdown(line.replace('# ', ''))}</h2>;
-            }
-            if (line.startsWith('## ')) {
-              return <h3 key={lineIdx} style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-main)', marginTop: '8px', marginBottom: '4px' }}>{parseInlineMarkdown(line.replace('## ', ''))}</h3>;
-            }
-            if (line.startsWith('### ')) {
-              return <h3 key={lineIdx} style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-main)', marginTop: '8px', marginBottom: '4px' }}>{parseInlineMarkdown(line.replace('### ', ''))}</h3>;
-            }
-            if (line.startsWith('- ') || line.startsWith('* ')) {
-              return <li key={lineIdx} style={{ marginLeft: '16px', marginBottom: '3px' }}>{parseInlineMarkdown(line.substring(2))}</li>;
-            }
-
-            if (!line) return <br key={lineIdx} />;
-
-            return (
-              <React.Fragment key={lineIdx}>
-                {parseInlineMarkdown(rawLine)}
-                {lineIdx < lines.length - 1 && <br />}
-              </React.Fragment>
-            );
-          })}
+          {renderedElements}
         </span>
       );
     });

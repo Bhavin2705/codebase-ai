@@ -38,3 +38,8 @@ backend/data/
 *.sqlite
 *.db
 .aider*
+
+# Ad-hoc debug/manual-test artefacts — never commit these
+test_*.ps1
+test_*.py
+*_body.json

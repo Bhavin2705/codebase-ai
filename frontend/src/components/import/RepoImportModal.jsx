@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { API_BASE_URL } from '../../config';
+import { API_BASE_URL, getAuthHeaders } from '../../config';
 
 export default function RepoImportModal({ isOpen, onClose, onStartIndexing }) {
   const [repoUrl, setRepoUrl] = useState('');
@@ -27,7 +27,7 @@ export default function RepoImportModal({ isOpen, onClose, onStartIndexing }) {
     try {
       const res = await fetch(`${API_BASE_URL}/repositories`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ github_url: repoUrl.trim() })
       });
 

@@ -11,7 +11,6 @@ tree-sitter-java>=0.21.0
 tree-sitter-python>=0.21.0
 tree-sitter-javascript>=0.21.0
 tree-sitter-typescript>=0.21.0
-google-genai>=0.1.1
 openai>=1.14.0
 python-multipart>=0.0.9
 pytest>=8.0.0

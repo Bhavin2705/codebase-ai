@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
+from app.config import verify_api_key
 from app.models.repository import Repository
 from app.models.file import File as FileModel
 from app.models.indexing_job import IndexingJob
@@ -65,7 +66,7 @@ async def _get_repo(repo_id: str, db: AsyncSession) -> Repository:
         raise HTTPException(status_code=404, detail="Repository not found")
     return repo
 
-@router.post("", response_model=RepoResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=RepoResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(verify_api_key)])
 async def import_repository(
     payload: RepoImportRequest,
     background_tasks: BackgroundTasks,
@@ -185,16 +186,28 @@ async def get_repository_file(repository_id: str, path: str = Query(...), db: As
     if not repo.current_version_id:
         raise HTTPException(status_code=404, detail="File not found")
 
-    stmt = select(FileModel).options(selectinload(FileModel.symbols)).where(
-        FileModel.repository_version_id == repo.current_version_id
+    stmt = (
+        select(FileModel)
+        .options(selectinload(FileModel.symbols))
+        .where(
+            FileModel.repository_version_id == repo.current_version_id,
+            FileModel.path == path
+        )
     )
-    files = (await db.execute(stmt)).scalars().all()
+    target = (await db.execute(stmt)).scalars().first()
 
-    target = None
-    for f in files:
-        if f.path == path or f.path.lower() == path.lower() or f.path.endswith(path):
-            target = f
-            break
+    if not target:
+        # Fallback to case-insensitive or ending match if exact path not matched
+        stmt_fallback = (
+            select(FileModel)
+            .options(selectinload(FileModel.symbols))
+            .where(FileModel.repository_version_id == repo.current_version_id)
+        )
+        all_files = (await db.execute(stmt_fallback)).scalars().all()
+        for f in all_files:
+            if f.path.lower() == path.lower() or f.path.endswith(path):
+                target = f
+                break
 
     if not target:
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
@@ -215,7 +228,7 @@ async def get_repository_file(repository_id: str, path: str = Query(...), db: As
         "symbols": symbols_list
     }
 
-@router.post("/{repository_id}/index", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/{repository_id}/index", status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(verify_api_key)])
 async def index_repository(
     repository_id: str,
     background_tasks: BackgroundTasks,
@@ -237,7 +250,7 @@ async def index_repository(
     background_tasks.add_task(_run_indexing_task, job_id)
     return {"job_id": job_id, "status": "pending"}
 
-@router.post("/{repository_id}/sync", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/{repository_id}/sync", status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(verify_api_key)])
 async def sync_repository(
     repository_id: str,
     background_tasks: BackgroundTasks,
@@ -285,42 +298,75 @@ async def get_indexing_job_status(repository_id: str, job_id: str, db: AsyncSess
 @router.get("/{repository_id}/index-stream")
 async def stream_repository_indexing(repository_id: str, db: AsyncSession = Depends(get_db)):
     repository = await _get_repo(repository_id, db)
+    repo_uuid = repository.id
 
     async def event_generator():
-        stmt = (
-            select(IndexingJob)
-            .where(IndexingJob.repository_id == repository.id)
-            .order_by(IndexingJob.created_at.desc())
-        )
-        job = (await db.execute(stmt)).scalars().first()
+        import asyncio
+        from app.database import AsyncSessionLocal
 
         stage_details = {
             "cloning": (1, "Repository Access", "Cloning source code repository"),
             "parsing": (2, "Discovery & Parsing", "Cataloging files and extracting AST nodes"),
-            "embedding": (4, "Representation", "Generating vector embeddings"),
-            "storing": (5, "Storage", "Persisting symbols & vector embeddings"),
-            "completed": (5, "Storage", "Persisted symbols & vector embeddings")
+            "embedding": (3, "Representation", "Generating vector embeddings"),
+            "storing": (4, "Storage", "Persisting symbols & vector embeddings"),
+            "completed": (4, "Storage", "Persisted symbols & vector embeddings")
         }
 
-        if job:
-            stage_info = stage_details.get(job.current_stage or "cloning", (1, "Repository Access", "Cloning source code repository"))
+        last_stage_id = 0
+        max_polls = 180  # Up to 90 seconds
+
+        for _ in range(max_polls):
+            async with AsyncSessionLocal() as session:
+                stmt = (
+                    select(IndexingJob)
+                    .where(IndexingJob.repository_id == repo_uuid)
+                    .order_by(IndexingJob.created_at.desc())
+                )
+                job = (await session.execute(stmt)).scalars().first()
+
+            if not job:
+                event_payload = {
+                    "stage_id": 1,
+                    "name": "Repository Access",
+                    "detail": "Initializing indexing pipeline",
+                    "status": "active"
+                }
+                yield f"data: {json.dumps(event_payload)}\n\n"
+                await asyncio.sleep(0.5)
+                continue
+
+            if job.status == "failed":
+                yield f"data: {json.dumps({'status': 'failed', 'error': job.error_message or 'Indexing failed'})}\n\n"
+                return
+
+            stage_info = stage_details.get(
+                job.current_stage or "cloning",
+                (1, "Repository Access", "Cloning source code repository")
+            )
             stage_id, stage_name, stage_detail = stage_info
+
+            # Emit stage update
             event_payload = {
                 "stage_id": stage_id,
                 "name": stage_name,
                 "detail": stage_detail,
-                "status": "completed" if job.status == "completed" else "active"
+                "status": "completed" if (job.status == "completed" or stage_id < last_stage_id) else "active"
             }
             yield f"data: {json.dumps(event_payload)}\n\n"
-        else:
-            event_payload = {
-                "stage_id": 1,
-                "name": "Repository Access",
-                "detail": "Initializing indexing pipeline",
-                "status": "completed"
-            }
-            yield f"data: {json.dumps(event_payload)}\n\n"
+            last_stage_id = max(last_stage_id, stage_id)
 
+            if job.status == "completed":
+                # Ensure all 4 stages marked complete
+                for s_id in range(1, 5):
+                    s_name = ["Repository Access", "Discovery & Parsing", "Representation", "Storage"][s_id - 1]
+                    s_det = ["Cloned source repository", "Cataloged files & AST nodes", "Generated vector embeddings", "Persisted symbols & vectors"][s_id - 1]
+                    yield f"data: {json.dumps({'stage_id': s_id, 'name': s_name, 'detail': s_det, 'status': 'completed'})}\n\n"
+                yield f"data: {json.dumps({'status': 'finished'})}\n\n"
+                return
+
+            await asyncio.sleep(0.5)
+
+        # Timeout fallback
         yield f"data: {json.dumps({'status': 'finished'})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

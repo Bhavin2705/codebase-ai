@@ -341,6 +341,8 @@ class LLMService:
             and not self.gemini_api_key.startswith("your_")
         ):
             try:
+                import httpx
+
                 url = (
                     "https://generativelanguage.googleapis.com/"
                     f"v1beta/models/{self.gemini_model}:"
@@ -351,41 +353,31 @@ class LLMService:
                     f"{system_msg}\n\n{prompt}"
                 )
 
-                payload = json.dumps(
-                    {
-                        "contents": [
-                            {
-                                "parts": [
-                                    {
-                                        "text": full_prompt,
-                                    }
-                                ]
-                            }
-                        ],
-                        "generationConfig": {
-                            "temperature": 0.2,
-                            "topP": 0.7,
-                            "maxOutputTokens": max_output_tokens,
-                        },
-                    }
-                ).encode("utf-8")
-
-                gemini_request = urllib.request.Request(
-                    url,
-                    data=payload,
-                    headers={
-                        "Content-Type": "application/json",
+                payload = {
+                    "contents": [
+                        {
+                            "parts": [
+                                {
+                                    "text": full_prompt,
+                                }
+                            ]
+                        }
+                    ],
+                    "generationConfig": {
+                        "temperature": 0.2,
+                        "topP": 0.7,
+                        "maxOutputTokens": max_output_tokens,
                     },
-                    method="POST",
-                )
+                }
 
-                with urllib.request.urlopen(
-                    gemini_request,
-                    timeout=15,
-                ) as gemini_response:
-                    response_data = json.loads(
-                        gemini_response.read().decode("utf-8")
+                async with httpx.AsyncClient(timeout=15.0) as http_client:
+                    # Fallback provider call: Google Gemini API
+                    gemini_resp = await http_client.post(
+                        url,
+                        json=payload,
+                        headers={"Content-Type": "application/json"}
                     )
+                    response_data = gemini_resp.json()
 
                 candidates = response_data.get("candidates", [])
 

@@ -1,180 +1,155 @@
-# AI Codebase Assistant
+# AI Codebase Knowledge Assistant
 
-## Problem Statement
+## 1. Problem Statement
 
-Developers spend a significant amount of time understanding unfamiliar codebases before they can make changes or fix issues. Reading source files manually becomes difficult as projects grow in size and complexity.
-
-This project provides an AI-powered assistant that indexes a source code repository and allows developers to ask questions in natural language. Instead of searching through multiple files manually, users receive context-aware answers with references to the relevant source files.
+Developers spend a significant portion of their onboarding and development time navigating unfamiliar, large-scale repositories where traditional keyword search tools fail to understand code structure, symbol relationships, and call hierarchies. The **AI Codebase Knowledge Assistant** solves this by automatically cloning and indexing Git repositories using Abstract Syntax Tree (AST) parsing, generating high-dimensional semantic embeddings, and performing hybrid retrieval (dense vector similarity + sparse lexical search) to provide precise, hallucination-resistant answers with line-level source code citations.
 
 ---
 
-## Features
+## 2. Architecture Diagram
 
-- Import and index a local or Git repository
-- Parse source code using Tree-sitter
-- Generate embeddings for semantic code search
-- Ask questions about the indexed codebase in natural language
-- Retrieve relevant code snippets before generating responses
-- Display file references with AI responses
-- Repository statistics and file exploration
-- REST API built using FastAPI
-- React-based frontend for interacting with the assistant
-
----
-
-## Architecture
-
-```text
-                  +------------------+
-                  |   React Frontend |
-                  +---------+--------+
-                            |
-                            | HTTP
-                            v
-                  +------------------+
-                  |  FastAPI Backend |
-                  +---------+--------+
-                            |
-         +------------------+------------------+
-         |                  |                  |
-         v                  v                  v
- +---------------+  +---------------+  +---------------+
- | Git Service   |  | Parser Service|  | LLM Service   |
- | Clone/Read    |  | Tree-sitter   |  | AI Responses  |
- +-------+-------+  +-------+-------+  +-------+-------+
-         |                  |                  |
-         +------------------+------------------+
-                            |
-                            v
-                  +------------------+
-                  | Embedding Service|
-                  +---------+--------+
-                            |
-                            v
-                  +------------------+
-                  | PostgreSQL +     |
-                  | pgvector Storage |
-                  +------------------+
+```
+[ GitHub Repository URL ]
+           │
+           ▼
+[ Git Clone & Tree-sitter AST Parser ]
+  (Extracts Functions, Classes, Methods & Exact Line Numbers)
+           │
+           ▼
+[ NVIDIA NIM Embeddings (768-dim) ]
+  (Model: nvidia/nv-embedqa-e5-v5)
+           │
+           ▼
+[ PostgreSQL / pgvector & pg_trgm ]
+  (Stores Code Symbols, Vectors & Inverted Trigram Index)
+           │
+           ▼
+[ Hybrid Retrieval Engine ]
+  (Dense Vector Cosine Similarity + Sparse Lexical Search)
+           │
+           ▼
+[ Dual LLM Pipeline ]
+  ├── Primary: NVIDIA NIM (meta/llama-3.1-70b-instruct)
+  └── Fallback: Google Gemini (gemini-3.5-flash)
+           │
+           ▼
+[ 3-Panel React UI ]
+  (Repository Explorer | Grounded Chat | Source Viewer with Line Citations)
 ```
 
 ---
 
-## Tech Stack
+## 3. Tech Stack
 
-### Frontend
-
-- React 18
-- Vite
-- React Router
-- Lucide React
-
-### Backend
-
-- FastAPI
-- Python
-- SQLAlchemy
-- PostgreSQL
-- pgvector
-- Tree-sitter
-- GitPython
-
-### AI
-
-- OpenAI API
-- Google Gemini API
-- Vector Embeddings
-
-### Database
-
-- PostgreSQL
-- pgvector
+| Component | Technology |
+| :--- | :--- |
+| **Frontend Framework** | React 18 |
+| **Frontend Build Tool** | Vite |
+| **Frontend Styling** | Vanilla CSS (CSS Design Tokens & Theme Variables) |
+| **Backend Framework** | FastAPI (Python 3.10+) |
+| **Database & Vector Store** | PostgreSQL 16 with `pgvector` & `pg_trgm` extensions |
+| **ORM & Database Driver** | Async SQLAlchemy 2.0 with `asyncpg` |
+| **Code Parser** | Tree-sitter (Java, Python, JavaScript, and `tree-sitter-typescript` with separate grammars for TypeScript `.ts` vs TSX `.tsx`) |
+| **Embedding Model** | NVIDIA NIM `nvidia/nv-embedqa-e5-v5` (768-dimensional embeddings) |
+| **Primary LLM** | NVIDIA NIM `meta/llama-3.1-70b-instruct` |
+| **Fallback LLM** | Google Gemini `gemini-3.5-flash` |
+| **HTTP Clients** | AsyncOpenAI & HTTPX (Async) |
+| **Testing & Evaluation** | Pytest & AnyIO |
 
 ---
 
-## Setup Instructions
+## 4. Evaluation Results
 
-### 1. Clone the repository
+*The following metrics are pulled directly from [`backend/data/eval_results.md`](file:///d:/Sem7/codebase-knowledge-ai/backend/data/eval_results.md) generated by the evaluation harness:*
 
-```bash
-git clone <repository-url>
-cd codebase-ai-main
+- **Mean Precision@5**: `0.51` (51.0%)
+- **Mean Recall@5**: `0.9` (90.0%)
+
+| ID | Query | Precision@5 | Recall@5 | Hits / Top-5 |
+|---|---|---|---|---|
+| 1 | How does OwnerController handle owner creation form processing? | 0.60 | 1.00 | 3 / 5 |
+| 2 | Where are Spring Data JPA database queries defined for Owner entities? | 0.60 | 1.00 | 3 / 5 |
+| 3 | How is caching configured in the system package? | 0.40 | 0.67 | 2 / 5 |
+| 4 | What controller handles veterinarian listing and search? | 0.40 | 0.67 | 2 / 5 |
+| 5 | Where is the welcome landing page controller located? | 0.60 | 1.00 | 3 / 5 |
+| 6 | How is pet entity persistence defined in the model layer? | 0.40 | 0.67 | 2 / 5 |
+| 7 | Where is the PetType formatter configured for spring binding? | 0.60 | 1.00 | 3 / 5 |
+| 8 | How are visits recorded for a pet in VisitController? | 0.60 | 1.00 | 3 / 5 |
+| 9 | Where is the main Spring Boot application entry point file? | 0.60 | 1.00 | 3 / 5 |
+| 10 | What class represents the veterinarian domain entity? | 0.40 | 0.67 | 2 / 5 |
+| 11 | Where are specialty domain models defined for vets? | 0.40 | 1.00 | 2 / 5 |
+| 12 | How is the base Person entity model implemented? | 0.40 | 0.67 | 2 / 5 |
+| 13 | Where is NamedEntity class providing id and name fields defined? | 0.60 | 1.00 | 3 / 5 |
+| 14 | How is BaseEntity mapped for JPA primary keys? | 0.60 | 1.00 | 3 / 5 |
+| 15 | Where are database initialization SQL scripts configured? | 0.40 | 1.00 | 2 / 5 |
+| 16 | How are custom crash/error controllers handled in system package? | 0.40 | 0.67 | 2 / 5 |
+| 17 | Where is Maven project object model configuration pom.xml? | 0.40 | 1.00 | 2 / 5 |
+| 18 | How is Owner domain entity structured with address and telephone? | 0.60 | 1.00 | 3 / 5 |
+| 19 | Where is VetRepository interface defined for vet database access? | 0.60 | 1.00 | 3 / 5 |
+| 20 | How is Visit domain entity mapped with date and description? | 0.60 | 1.00 | 3 / 5 |
+
+---
+
+## 5. Setup Instructions
+
+### Environment Variables
+
+Create a `.env` file in the `backend/` directory (or workspace root) with the following configuration:
+
+```env
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/codebase_ai
+NVIDIA_NIM_API_KEY=nvapi-your-nvidia-nim-api-key
+NVIDIA_NIM_BASE_URL=https://integrate.api.nvidia.com/v1
+NVIDIA_NIM_CHAT_MODEL=meta/llama-3.1-70b-instruct
+NVIDIA_NIM_EMBED_MODEL=nvidia/nv-embedqa-e5-v5
+GEMINI_API_KEY=your-google-gemini-api-key
+GEMINI_MODEL=gemini-3.5-flash
+FRONTEND_URL=http://localhost:5173
+GITHUB_WEBHOOK_SECRET=
 ```
 
-### 2. Start PostgreSQL
-
-```bash
-docker-compose up -d
-```
-
-### 3. Configure environment variables
-
-Create a `.env` file inside the backend directory using `.env.example`.
-
-Example variables:
-
-```text
-OPENAI_API_KEY=your_api_key
-GOOGLE_API_KEY=your_api_key
-DATABASE_URL=your_database_url
-```
-
-### 4. Install backend dependencies
+### Running Backend
 
 ```bash
 cd backend
-
-python -m venv venv
-
-# Windows
-venv\Scripts\activate
-
-# Linux/macOS
-source venv/bin/activate
-
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+
+# Run database migrations / initialize PostgreSQL with pgvector:
+# Ensure PostgreSQL is running on port 5432 with pgvector enabled
+
+# Start backend server
+uvicorn app.main:app --reload --port 8000
 ```
 
-### 5. Start the backend
-
-```bash
-uvicorn app.main:app --reload
-```
-
-The backend will run on:
-
-```
-http://localhost:8000
-```
-
----
-
-### 6. Install frontend dependencies
+### Running Frontend
 
 ```bash
 cd frontend
-
 npm install
-```
-
-### 7. Start the frontend
-
-```bash
 npm run dev
 ```
 
-The frontend will run on:
+The frontend application will be accessible at `http://localhost:5173`.
 
-```
-http://localhost:5173
+### Running Tests & Retrieval Evaluation
+
+```bash
+# Run test suite (17 tests covering AST parsing, multi-version indexing, & LLM fallback)
+cd backend
+python -m pytest -v
+
+# Run retrieval evaluation benchmark
+python scripts/evaluate_retrieval.py
 ```
 
 ---
 
-## Known Limitations
+## 6. Demo Video / GIF
 
-- Supports only the programming languages configured in the parser service.
-- AI responses depend on the quality of the retrieved context and selected language model.
-- Large repositories require additional indexing time before queries can be answered.
-- Repository data is stored in memory during runtime, making the current implementation more suitable for an MVP than production deployment.
-- Authentication and role-based access control are not implemented.
-- The application currently focuses on understanding existing code rather than editing or refactoring it automatically.
+<!-- DEMO_PLACEHOLDER_START -->
+[![Watch Demo Walkthrough](https://img.shields.io/badge/Demo%20Video-Watch%20Walkthrough-blueviolet?style=for-the-badge&logo=youtube)](https://github.com/Bhavin2705/codebase-ai)
+
+*(Demo video / animated GIF walkthrough link placeholder)*
+<!-- DEMO_PLACEHOLDER_END -->
