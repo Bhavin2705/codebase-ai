@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     GEMINI_API_KEY: str
 
-    GEMINI_MODEL: str = "gemini-3.5-flash"
+    GEMINI_MODEL: str = "gemini-2.0-flash"
 
     NVIDIA_NIM_API_KEY: str = ""
     NVIDIA_NIM_BASE_URL: str = "https://integrate.api.nvidia.com/v1"

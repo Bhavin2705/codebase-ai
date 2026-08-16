@@ -280,5 +280,3 @@ class CodeParserService:
             })
 
         return extracted_symbols
-
-

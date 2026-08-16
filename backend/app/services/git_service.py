@@ -17,6 +17,21 @@ ALLOWED_EXT = {".java", ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".m
 IGNORE_DIRS = {".git", "node_modules", "target", "build", "__pycache__", ".venv", "dist", ".idea"}
 
 class GitService:
+    def check_repository_accessible(self, url: str, timeout: int = 5) -> bool:
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        try:
+            res = subprocess.run(
+                ["git", "ls-remote", "--exit-code", url],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=env
+            )
+            return res.returncode == 0
+        except Exception as err:
+            logger.debug("git ls-remote failed for %s: %s", url, err)
+            return False
+
     def clone_repository(self, url: str) -> str:
         repo_dir = tempfile.mkdtemp(prefix="repo_clone_")
         if HAS_GIT:

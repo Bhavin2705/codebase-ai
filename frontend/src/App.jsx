@@ -113,7 +113,10 @@ export default function App() {
           element={
             <RepoOverview
               repo={selectedRepo}
-              onSelectQuestion={() => {}}
+              onSelectQuestion={(q) => {
+                const dest = selectedRepo?.id ? `/workspace/${selectedRepo.id}` : '/workspace';
+                navigate(dest, { state: { initialQuestion: q } });
+              }}
             />
           }
         />

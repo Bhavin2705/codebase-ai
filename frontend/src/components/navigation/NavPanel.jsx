@@ -68,14 +68,6 @@ export default function NavPanel({ selectedRepo, onSelectFile }) {
       <div className="nav-section">
         {renderTree(tree)}
       </div>
-
-      <div className="panel-header" style={{ borderTop: '1px solid var(--border-color)', marginTop: 'auto' }}>
-        Recent Questions
-      </div>
-      <div style={{ padding: '10px 14px', fontSize: '11px', color: 'var(--text-muted)' }}>
-        <div style={{ padding: '4px 0', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}>• How does architecture flow work?</div>
-        <div style={{ padding: '4px 0', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}>• Explain routes & data handling</div>
-      </div>
     </nav>
   );
 }

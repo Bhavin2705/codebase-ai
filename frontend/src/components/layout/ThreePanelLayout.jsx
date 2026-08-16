@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import NavPanel from '../navigation/NavPanel';
 import ChatPanel from '../chat/ChatPanel';
 import EvidencePanel from '../evidence/EvidencePanel';
@@ -58,6 +58,7 @@ function Toast({ toasts, onDismiss }) {
 export default function ThreePanelLayout({ selectedRepo }) {
   const { repoId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const currentRepoId = repoId || selectedRepo?.id || null;
   const repoName = selectedRepo?.name || currentRepoId || 'Repository';
@@ -96,6 +97,16 @@ export default function ThreePanelLayout({ selectedRepo }) {
     setConversations([initialWelcomeMessage]);
     setActiveCitation(null);
   }, [currentRepoId, repoName]);
+
+  // Fire starter question passed via router state from the overview page
+  useEffect(() => {
+    const starterQuestion = location.state?.initialQuestion;
+    if (!starterQuestion || !currentRepoId) return;
+    // Clear the state so a refresh/back-navigation doesn't re-fire
+    window.history.replaceState({}, '', window.location.pathname);
+    handleAskQuestion(starterQuestion);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentRepoId]);
 
   const handleSelectCitation = (citation) => {
     setActiveCitation(citation);

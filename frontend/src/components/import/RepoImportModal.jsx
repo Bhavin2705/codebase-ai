@@ -72,7 +72,7 @@ export default function RepoImportModal({ isOpen, onClose, onStartIndexing }) {
           Import GitHub Repository
         </h2>
         <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginBottom: '20px' }}>
-          Enter a public Java or Python GitHub repository URL to index architecture, symbols, and source files.
+          Enter a public GitHub repository URL to index architecture, symbols, and source files. Supported languages: Java, Python, JavaScript, and TypeScript.
         </p>
 
         <form onSubmit={handleSubmit}>
@@ -90,7 +90,7 @@ export default function RepoImportModal({ isOpen, onClose, onStartIndexing }) {
               disabled={loading}
             />
             {error && (
-              <div style={{ color: '#f87171', fontSize: '12px', marginTop: '6px' }}>
+              <div style={{ color: '#f87171', fontSize: '12px', marginTop: '8px', lineHeight: '1.4', whiteSpace: 'pre-line', backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', padding: '8px 12px', borderRadius: '6px' }}>
                 {error}
               </div>
             )}

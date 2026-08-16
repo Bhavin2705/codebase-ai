@@ -28,3 +28,12 @@ def test_repository_tree_and_file(client):
 
     bad_file = client.get(f"/repositories/{repo_id}/file?path=nonexistent_file_path.java")
     assert bad_file.status_code == 404
+
+def test_import_nonexistent_repository_fails_preflight(client):
+    import_payload = {"github_url": "https://github.com/nonexistent-org-test-9999/fake-repo-test-8888"}
+    res = client.post("/repositories", json=import_payload)
+    assert res.status_code == 404
+    data = res.json()
+    assert "Repository not found" in data["detail"]
+    assert "No indexing job was created" in data["detail"]
+

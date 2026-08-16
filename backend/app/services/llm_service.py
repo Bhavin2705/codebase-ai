@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import urllib.request
 from typing import Any, Dict, List
 
 from app.config import settings
@@ -44,7 +43,7 @@ class LLMService:
         return os.getenv("GEMINI_MODEL") or getattr(
             settings,
             "GEMINI_MODEL",
-            "gemini-3.5-flash",
+            "gemini-2.0-flash",
         )
 
     async def generate_rag_response(

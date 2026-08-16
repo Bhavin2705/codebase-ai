@@ -239,13 +239,6 @@ async def test_embedding_failure_fails_indexing_job():
             m.setattr(indexing_service.embedder, "generate_embedding", mock_fail_embedding)
             m.setattr(indexing_service.git, "cleanup", lambda dir: None)
 
-
-
-
-
-
-
-
             await indexing_service.run_pipeline(str(job_id))
 
         async with AsyncSessionLocal() as db:
@@ -255,5 +248,6 @@ async def test_embedding_failure_fails_indexing_job():
             assert res_job is not None
             assert res_job.status == "failed"
             assert "Embedding pipeline failed" in (res_job.error_message or "")
+            # repo has no prior current_version_id, so failure sets status to "error"
             assert res_repo is not None
             assert res_repo.status == "error"

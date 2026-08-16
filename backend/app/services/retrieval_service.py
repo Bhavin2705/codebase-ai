@@ -2,8 +2,7 @@ import re
 import uuid
 from typing import List, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_
-from sqlalchemy.orm import selectinload
+from sqlalchemy import select, or_
 
 from app.models.repository import Repository
 from app.models.file import File as FileModel
@@ -35,17 +34,22 @@ class RetrievalService:
         repo_meta = {
             "name": repo.name if repo else "Workspace",
             "language": repo.language if repo else "Multi-Language",
-            "total_files": 0
+            "total_files": 0,
+            "all_files": []
         }
 
         if not repo or not repo.current_version_id:
             return [], repo_meta
 
-        stmt_count = select(func.count(FileModel.id)).where(
-            FileModel.repository_version_id == repo.current_version_id
+        # Single query: fetch all file paths for the active version (sorted for determinism)
+        stmt_paths = (
+            select(FileModel.path)
+            .where(FileModel.repository_version_id == repo.current_version_id)
+            .order_by(FileModel.path)
         )
-        total_files = (await db.execute(stmt_count)).scalar() or 0
-        repo_meta["total_files"] = total_files
+        all_file_paths: List[str] = list((await db.execute(stmt_paths)).scalars().all())
+        repo_meta["all_files"] = all_file_paths
+        repo_meta["total_files"] = len(all_file_paths)
 
         q_vec = []
         try:

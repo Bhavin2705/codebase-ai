@@ -15,6 +15,9 @@ from app.models.file import File as FileModel
 from app.models.indexing_job import IndexingJob
 from app.schemas.repository import RepoImportRequest, RepoResponse, RepoStats
 from app.services.indexing_service import indexing_service
+from app.services.git_service import GitService
+
+git_service = GitService()
 
 router = APIRouter(prefix="/repositories", tags=["Repositories"])
 
@@ -74,6 +77,12 @@ async def import_repository(
 ):
     if "github.com" not in payload.github_url:
         raise HTTPException(status_code=400, detail="Invalid GitHub URL format")
+
+    if not git_service.check_repository_accessible(payload.github_url):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Repository not found\nWe couldn't access this GitHub repository. Please check that the URL is correct and that the repository is public or accessible with the configured credentials. No indexing job was created."
+        )
 
     stmt_exist = select(Repository).options(selectinload(Repository.current_version)).where(Repository.github_url == payload.github_url)
     existing_repo = (await db.execute(stmt_exist)).scalars().first()

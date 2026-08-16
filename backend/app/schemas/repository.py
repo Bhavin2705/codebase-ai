@@ -10,12 +10,6 @@ class RepoStats(BaseModel):
     classes: int = 0
     methods: int = 0
 
-class IndexStage(BaseModel):
-    id: int
-    name: str
-    status: str
-    detail: str | None = None
-
 class RepoResponse(BaseModel):
     id: str
     name: str
@@ -28,9 +22,3 @@ class RepoResponse(BaseModel):
     stats: RepoStats | None = None
 
     model_config = ConfigDict(from_attributes=True)
-
-class RepoIndexResponse(BaseModel):
-    job_id: str
-    status: str
-    stats: RepoStats | None = None
-    stages: list[IndexStage] = []
