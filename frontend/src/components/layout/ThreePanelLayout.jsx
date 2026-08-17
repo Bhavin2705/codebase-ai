@@ -96,7 +96,9 @@ export default function ThreePanelLayout({ selectedRepo }) {
     };
     setConversations([initialWelcomeMessage]);
     setActiveCitation(null);
-  }, [currentRepoId, repoName]);
+    // Only re-initialize conversations when switching to a different repository ID
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentRepoId]);
 
   // Fire starter question passed via router state from the overview page
   useEffect(() => {
@@ -146,11 +148,11 @@ export default function ThreePanelLayout({ selectedRepo }) {
       });
 
       if (res.status === 401) {
-        addToast('Unauthorized — 401', 'Invalid or missing API key. Update your key via Config in the header.', 'error');
+        addToast('Unauthorized — 401', 'Invalid or missing API key. Verify VITE_API_KEY environment configuration.', 'error');
         setConversations((prev) =>
           prev.map((msg) =>
             msg.id === tempId
-              ? { ...msg, isPending: false, answer: '⚠️ API request rejected: 401 Unauthorized. Check your API key in Config.' }
+              ? { ...msg, isPending: false, answer: '⚠️ API request rejected: 401 Unauthorized. Verify API access key.' }
               : msg
           )
         );

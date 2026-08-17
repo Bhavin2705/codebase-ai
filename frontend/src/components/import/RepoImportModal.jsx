@@ -12,7 +12,7 @@ export default function RepoImportModal({ isOpen, onClose, onStartIndexing }) {
     e.preventDefault();
     setError('');
 
-    const githubRegex = /^https?:\/\/(www\.)?github\.com\/[\w-]+\/[\w-]+(\.git)?$/i;
+    const githubRegex = /^https?:\/\/(www\.)?github\.com\/[\w.-]+\/[\w.-]+(\.git)?$/i;
     if (!repoUrl.trim()) {
       setError('Please provide a public GitHub repository URL.');
       return;
@@ -100,7 +100,7 @@ export default function RepoImportModal({ isOpen, onClose, onStartIndexing }) {
             <button type="button" className="btn btn-secondary" onClick={onClose} disabled={loading}>
               Cancel
             </button>
-            <button type="submit" className="btn" disabled={loading}>
+            <button type="submit" className="btn btn-primary" disabled={loading}>
               {loading ? 'Submitting...' : 'Begin Indexing'}
             </button>
           </div>

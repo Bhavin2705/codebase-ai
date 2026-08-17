@@ -3,7 +3,8 @@
 *.env
 backend/.env
 
-# Markdown files (allow README.md)
+# Markdown files — ignore all except README
+*.md
 !README.md
 
 # Python

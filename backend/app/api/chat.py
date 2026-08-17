@@ -87,13 +87,14 @@ async def chat_query(payload: ChatRequest, db: AsyncSession = Depends(get_db)):
         "contexts_analyzed": analyzed_paths,
         "execution_time_ms": elapsed,
         "keywords_extracted": [],
-        "llm_engine": f"NVIDIA NIM ({llm_service.nim_model})" if (llm_service.nim_api_key and llm_service.nim_api_key.startswith("nvapi-")) else f"Gemini ({llm_service.gemini_model})"
+        "llm_engine": rag_result.get("provider") or (f"NVIDIA NIM ({llm_service.nim_model})" if (llm_service.nim_api_key and llm_service.nim_api_key.startswith("nvapi-")) else f"Gemini ({llm_service.gemini_model})"),
     }
 
-    chat_id = f"chat-{uuid.uuid4().hex[:8]}"
+    record_id = uuid.uuid4()
+    chat_id = f"chat-{record_id.hex[:8]}"
 
     chat_record = ChatModel(
-        id=uuid.uuid4(),
+        id=record_id,
         repository_id=repo.id,
         question=payload.question,
         answer=rag_result["answer"],

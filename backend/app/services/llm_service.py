@@ -1,9 +1,12 @@
-import json
+import logging
 import os
 import re
 from typing import Any, Dict, List
+import httpx
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class LLMService:
@@ -57,6 +60,7 @@ class LLMService:
                 "answer": "No matching source code context found in this repository.",
                 "confidence": "low",
                 "citations": [],
+                "provider": "None",
             }
 
         # ---------------------------------------------------------
@@ -278,135 +282,139 @@ class LLMService:
             f"{limit_instruction}"
         )
 
-        # ---------------------------------------------------------
-        # 1. Primary provider: NVIDIA NIM
-        # ---------------------------------------------------------
-        if (
-            self.nim_api_key
-            and self.nim_api_key.startswith("nvapi-")
-        ):
-            try:
-                from openai import AsyncOpenAI
+        async with httpx.AsyncClient(timeout=30.0) as http_client:
+            # ---------------------------------------------------------
+            # 1. Primary provider: NVIDIA NIM (native HTTP POST)
+            # ---------------------------------------------------------
+            if (
+                self.nim_api_key
+                and self.nim_api_key.startswith("nvapi-")
+            ):
+                try:
+                    nim_url = f"{self.nim_base_url.rstrip('/')}/chat/completions"
+                    nim_headers = {
+                        "Authorization": f"Bearer {self.nim_api_key}",
+                        "Content-Type": "application/json",
+                    }
+                    nim_payload = {
+                        "model": self.nim_model,
+                        "messages": [
+                            {"role": "system", "content": system_msg},
+                            {"role": "user", "content": prompt},
+                        ],
+                        "temperature": 0.2,
+                        "top_p": 0.7,
+                        "max_tokens": max_output_tokens,
+                    }
 
-                client = AsyncOpenAI(
-                    api_key=self.nim_api_key,
-                    base_url=self.nim_base_url,
-                    timeout=30.0,
-                    max_retries=1,
-                )
-
-                response = await client.chat.completions.create(
-                    model=self.nim_model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": system_msg,
-                        },
-                        {
-                            "role": "user",
-                            "content": prompt,
-                        },
-                    ],
-                    temperature=0.2,
-                    top_p=0.7,
-                    max_tokens=max_output_tokens,
-                )
-
-                answer_content = response.choices[0].message.content
-
-                if not answer_content:
-                    raise RuntimeError(
-                        "NVIDIA NIM returned an empty response."
+                    nim_resp = await http_client.post(
+                        nim_url,
+                        json=nim_payload,
+                        headers=nim_headers,
                     )
 
-                return {
-                    "answer": answer_content,
-                    "confidence": "high",
-                    "citations": citations,
-                }
+                    if nim_resp.status_code >= 400:
+                        raise RuntimeError(
+                            f"NVIDIA NIM HTTP {nim_resp.status_code}: {nim_resp.text}"
+                        )
 
-            except Exception as error:
-                print(
-                    f"NVIDIA NIM API Error "
-                    f"(falling back to Gemini): {error}"
-                )
+                    nim_data = nim_resp.json()
+                    choices = nim_data.get("choices", [])
+                    if choices:
+                        answer_content = choices[0].get("message", {}).get("content", "")
+                        if answer_content:
+                            return {
+                                "answer": answer_content,
+                                "confidence": "high",
+                                "citations": citations,
+                                "provider": f"NVIDIA NIM ({self.nim_model})",
+                            }
 
-        # ---------------------------------------------------------
-        # 2. Fallback provider: Gemini
-        # ---------------------------------------------------------
-        if (
-            self.gemini_api_key
-            and len(self.gemini_api_key) > 5
-            and not self.gemini_api_key.startswith("your_")
-        ):
-            try:
-                import httpx
+                    raise RuntimeError("NVIDIA NIM returned an empty response.")
 
-                url = (
-                    "https://generativelanguage.googleapis.com/"
-                    f"v1beta/models/{self.gemini_model}:"
-                    f"generateContent?key={self.gemini_api_key}"
-                )
+                except Exception as error:
+                    logger.warning(
+                        "NVIDIA NIM API Error (falling back to Gemini): %s",
+                        error,
+                    )
 
-                full_prompt = (
-                    f"{system_msg}\n\n{prompt}"
-                )
+            # ---------------------------------------------------------
+            # 2. Fallback provider: Google Gemini (native HTTP POST)
+            # ---------------------------------------------------------
+            if (
+                self.gemini_api_key
+                and len(self.gemini_api_key) > 5
+                and not self.gemini_api_key.startswith("your_")
+            ):
+                try:
+                    url = (
+                        "https://generativelanguage.googleapis.com/"
+                        f"v1beta/models/{self.gemini_model}:"
+                        f"generateContent?key={self.gemini_api_key}"
+                    )
 
-                payload = {
-                    "contents": [
-                        {
-                            "parts": [
-                                {
-                                    "text": full_prompt,
-                                }
-                            ]
-                        }
-                    ],
-                    "generationConfig": {
-                        "temperature": 0.2,
-                        "topP": 0.7,
-                        "maxOutputTokens": max_output_tokens,
-                    },
-                }
+                    full_prompt = f"{system_msg}\n\n{prompt}"
+                    payload = {
+                        "contents": [
+                            {
+                                "parts": [
+                                    {
+                                        "text": full_prompt,
+                                    }
+                                ]
+                            }
+                        ],
+                        "generationConfig": {
+                            "temperature": 0.2,
+                            "topP": 0.7,
+                            "maxOutputTokens": max_output_tokens,
+                        },
+                    }
 
-                async with httpx.AsyncClient(timeout=15.0) as http_client:
-                    # Fallback provider call: Google Gemini API
                     gemini_resp = await http_client.post(
                         url,
                         json=payload,
-                        headers={"Content-Type": "application/json"}
+                        headers={"Content-Type": "application/json"},
                     )
                     response_data = gemini_resp.json()
 
-                candidates = response_data.get("candidates", [])
+                    if (
+                        isinstance(getattr(gemini_resp, "status_code", None), int)
+                        and gemini_resp.status_code >= 400
+                    ):
+                        err_msg = response_data.get("error", {}).get(
+                            "message", getattr(gemini_resp, "text", "")
+                        )
+                        raise RuntimeError(
+                            f"Gemini API HTTP {gemini_resp.status_code}: {err_msg}"
+                        )
 
-                if not candidates:
-                    raise RuntimeError(
-                        "Gemini returned no candidates."
+                    candidates = response_data.get("candidates", [])
+                    if not candidates:
+                        raise RuntimeError("Gemini returned no candidates.")
+
+                    answer_text = (
+                        candidates[0]
+                        .get("content", {})
+                        .get("parts", [{}])[0]
+                        .get("text")
                     )
 
-                answer_text = (
-                    candidates[0]
-                    .get("content", {})
-                    .get("parts", [{}])[0]
-                    .get("text")
-                )
+                    if not answer_text:
+                        raise RuntimeError("Gemini returned an empty response.")
 
-                if not answer_text:
-                    raise RuntimeError(
-                        "Gemini returned an empty response."
+                    return {
+                        "answer": answer_text,
+                        "confidence": "high",
+                        "citations": citations,
+                        "provider": f"Gemini ({self.gemini_model})",
+                    }
+
+                except Exception as error:
+                    logger.warning(
+                        "Gemini API Fallback Error: %s",
+                        error,
                     )
-
-                return {
-                    "answer": answer_text,
-                    "confidence": "high",
-                    "citations": citations,
-                }
-
-            except Exception as error:
-                print(
-                    f"Gemini API Fallback Error: {error}"
-                )
 
         # ---------------------------------------------------------
         # 3. Both providers unavailable
@@ -419,4 +427,5 @@ class LLMService:
             ),
             "confidence": "none",
             "citations": [],
+            "provider": "None",
         }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, Brain, ChevronDown, ChevronUp, FileCode2, MapPin, Send, Terminal } from 'lucide-react';
+import { Clock, Brain, ChevronDown, ChevronUp, FileCode2, MapPin, Send } from 'lucide-react';
 
 function LoadingStopwatch() {
   const [elapsed, setElapsed] = useState(0);
@@ -239,7 +239,7 @@ export default function ChatPanel({ conversations, onSelectCitation, onAskQuesti
           return;
         }
 
-        if (line === '.' || line === '```') return;
+        if (line === '.') return;
 
         if (line.startsWith('# ')) {
           renderedElements.push(<h2 key={lineIdx} style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-main)', marginTop: '8px', marginBottom: '4px' }}>{parseInlineMarkdown(line.replace('# ', ''))}</h2>);

@@ -14,11 +14,10 @@ export default function RepoOverview({ repo, onSelectQuestion }) {
   };
 
   const handleQuestionClick = (q) => {
-    if (onSelectQuestion) onSelectQuestion(q);
-    if (repo?.id) {
-      navigate(`/workspace/${repo.id}`);
+    if (onSelectQuestion) {
+      onSelectQuestion(q);
     } else {
-      navigate('/workspace');
+      navigate(repo?.id ? `/workspace/${repo.id}` : '/workspace');
     }
   };
 
@@ -82,7 +81,7 @@ export default function RepoOverview({ repo, onSelectQuestion }) {
               {repo.name}
             </h1>
             <p style={{ color: 'var(--text-subtle)', fontSize: '12px', marginTop: '2px', fontFamily: 'var(--font-mono)' }}>
-              {repo.github_url || repo.url || ''}
+              {repo.github_url || ''}
             </p>
           </div>
           <button className="btn btn-primary" onClick={handleOpenWorkspace} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
@@ -105,11 +104,11 @@ export default function RepoOverview({ repo, onSelectQuestion }) {
           </div>
           <div>
             <div style={{ fontSize: '10px', color: 'var(--text-subtle)', letterSpacing: '0.5px' }}>INDEXED FILES</div>
-            <div className="stat-metric">{repo.stats?.files ?? 0} Files</div>
+            <div className="stat-metric">{repo.stats?.files ?? repo.file_count ?? 0} Files</div>
           </div>
           <div>
-            <div style={{ fontSize: '10px', color: 'var(--text-subtle)', letterSpacing: '0.5px' }}>PARSED SYMBOLS</div>
-            <div className="stat-metric">{repo.stats?.classes ?? 0} Symbols</div>
+            <div style={{ fontSize: '10px', color: 'var(--text-subtle)', letterSpacing: '0.5px' }}>EXTRACTED SYMBOLS</div>
+            <div className="stat-metric">{repo.stats?.symbols ?? repo.stats?.classes ?? repo.symbol_count ?? 0} Symbols</div>
           </div>
           <div>
             <div style={{ fontSize: '10px', color: 'var(--text-subtle)', letterSpacing: '0.5px' }}>STATUS</div>
@@ -125,21 +124,14 @@ export default function RepoOverview({ repo, onSelectQuestion }) {
           <HelpCircle size={16} style={{ color: 'var(--accent-cyan)' }} />
           <span>Starter Questions</span>
         </h2>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
+        <div className="questions-grid">
           {questions.map((q, idx) => (
             <div
               key={idx}
-              className="card-hover"
+              className="question-card"
               onClick={() => handleQuestionClick(q)}
-              style={{
-                backgroundColor: 'var(--bg-panel)',
-                border: '1px solid var(--border-color)',
-                borderRadius: '6px',
-                padding: '14px',
-                cursor: 'pointer'
-              }}
             >
-              <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-main)' }}>
+              <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-main)', lineHeight: 1.5 }}>
                 {q}
               </div>
             </div>

@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
@@ -7,8 +6,7 @@ class RepoImportRequest(BaseModel):
 
 class RepoStats(BaseModel):
     files: int = 0
-    classes: int = 0
-    methods: int = 0
+    symbols: int = 0
 
 class RepoResponse(BaseModel):
     id: str
@@ -16,7 +14,6 @@ class RepoResponse(BaseModel):
     github_url: str
     language: str
     status: str
-    current_version_id: str | None = None
     commit_sha: str | None = None
     indexed_at: datetime | None = None
     stats: RepoStats | None = None

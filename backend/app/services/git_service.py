@@ -35,7 +35,18 @@ class GitService:
     def clone_repository(self, url: str) -> str:
         repo_dir = tempfile.mkdtemp(prefix="repo_clone_")
         if HAS_GIT:
-            Repo.clone_from(url, repo_dir, depth=1)
+            try:
+                Repo.clone_from(url, repo_dir, depth=1)
+                return repo_dir
+            except Exception as git_err:
+                logger.debug("GitPython clone failed for %s, trying git CLI: %s", url, git_err)
+        try:
+            res = subprocess.run(["git", "clone", "--depth=1", url, repo_dir], capture_output=True, text=True)
+            if res.returncode == 0:
+                return repo_dir
+            logger.debug("git clone CLI failed: %s", res.stderr.strip())
+        except Exception as proc_err:
+            logger.debug("subprocess git clone failed for %s: %s", url, proc_err)
         return repo_dir
 
     def get_commit_sha(self, repo_dir: str) -> str:

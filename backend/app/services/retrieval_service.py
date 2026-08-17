@@ -38,13 +38,13 @@ class RetrievalService:
             "all_files": []
         }
 
-        if not repo or not repo.current_version_id:
+        if not repo:
             return [], repo_meta
 
-        # Single query: fetch all file paths for the active version (sorted for determinism)
+        # Single query: fetch all file paths for the active repository (sorted for determinism)
         stmt_paths = (
             select(FileModel.path)
-            .where(FileModel.repository_version_id == repo.current_version_id)
+            .where(FileModel.repository_id == repo.id)
             .order_by(FileModel.path)
         )
         all_file_paths: List[str] = list((await db.execute(stmt_paths)).scalars().all())
@@ -84,7 +84,7 @@ class RetrievalService:
                     select(SymbolModel, FileModel, cos_dist.label("dist"))
                     .join(FileModel, SymbolModel.file_id == FileModel.id)
                     .where(
-                        FileModel.repository_version_id == repo.current_version_id,
+                        FileModel.repository_id == repo.id,
                         SymbolModel.embedding.is_not(None)
                     )
                     .order_by(cos_dist)
@@ -113,7 +113,7 @@ class RetrievalService:
                 select(SymbolModel, FileModel)
                 .join(FileModel, SymbolModel.file_id == FileModel.id)
                 .where(
-                    FileModel.repository_version_id == repo.current_version_id,
+                    FileModel.repository_id == repo.id,
                     or_(*lex_conditions)
                 )
                 .limit(top_k * 4)
@@ -132,7 +132,7 @@ class RetrievalService:
             stmt_fallback = (
                 select(SymbolModel, FileModel)
                 .join(FileModel, SymbolModel.file_id == FileModel.id)
-                .where(FileModel.repository_version_id == repo.current_version_id)
+                .where(FileModel.repository_id == repo.id)
                 .limit(top_k * 2)
             )
             fallback_rows = (await db.execute(stmt_fallback)).all()

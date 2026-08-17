@@ -4,12 +4,21 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.services.llm_service import LLMService
 from app.services.embedding_service import EmbeddingService
+from app.services.git_service import GitService
 
 from app.config import settings
 
 @pytest.fixture(autouse=True)
 def mock_external_services(monkeypatch):
     monkeypatch.setattr(settings, "API_ACCESS_KEY", "")
+    
+    def mock_check_repo(self, url):
+        if "nonexistent" in url or "fake-repo" in url or "invalid" in url:
+            return False
+        return True
+
+    monkeypatch.setattr(GitService, "check_repository_accessible", mock_check_repo)
+
     async def mock_generate_rag_response(question, contexts, repo_meta=None):
         citations = []
         for idx, ctx in enumerate(contexts):

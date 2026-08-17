@@ -38,3 +38,17 @@ def test_mern_js_jsx_parsing():
     assert any(t in ("model", "route", "component", "function") for t in symbol_types)
     assert "User" in names or "UserProfile" in names or "UserCard" in names or any("router." in n for n in names)
 
+def test_fallback_parsing():
+    parser = CodeParserService()
+    python_code = "class AccountManager:\n    def get_balance():\n        return 100\n"
+    symbols_py = parser.parse_file("services/account.py", python_code, ".py")
+    assert len(symbols_py) >= 2
+    names = [s["name"] for s in symbols_py]
+    assert "AccountManager" in names
+    assert "get_balance" in names
+
+    js_code = "const handler = () => { return true; };"
+    symbols_mjs = parser.parse_file("utils/helper.mjs", js_code, ".mjs")
+    assert len(symbols_mjs) >= 1
+    assert symbols_mjs[0]["name"] == "handler"
+

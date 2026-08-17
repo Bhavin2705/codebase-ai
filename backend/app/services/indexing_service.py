@@ -2,14 +2,11 @@ import os
 import uuid
 import hashlib
 import logging
-from datetime import datetime
-from typing import List, Dict, Any, Tuple
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload
+from datetime import datetime, timezone
+from sqlalchemy import select, delete
 
 from app.database import AsyncSessionLocal
 from app.models.repository import Repository
-from app.models.repository_version import RepositoryVersion
 from app.models.file import File as FileModel
 from app.models.symbol import Symbol as SymbolModel
 from app.models.indexing_job import IndexingJob
@@ -19,6 +16,7 @@ from app.services.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
 
+
 class IndexingService:
     def __init__(self):
         self.git = GitService()
@@ -26,7 +24,6 @@ class IndexingService:
         self.embedder = EmbeddingService()
 
     async def run_pipeline(self, job_id_str: str) -> None:
-
         async with AsyncSessionLocal() as db:
             try:
                 job_uuid = uuid.UUID(job_id_str)
@@ -47,7 +44,6 @@ class IndexingService:
                 return
 
             repo_dir = None
-            ver = None
 
             try:
                 job.status = "running"
@@ -61,20 +57,10 @@ class IndexingService:
                 job.current_stage = "parsing"
                 job.progress = 30
 
-                stmt_existing_ver = select(RepositoryVersion).where(
-                    RepositoryVersion.repository_id == repo.id,
-                    RepositoryVersion.commit_sha == commit_sha
-                )
-                existing_ver = (await db.execute(stmt_existing_ver)).scalars().first()
-
-                from datetime import timezone
                 now_utc = datetime.now(timezone.utc)
 
-                if existing_ver and existing_ver.status in ("active", "completed"):
-                    repo.current_version_id = existing_ver.id
-                    repo.status = "ready"
-                    repo.indexed_at = existing_ver.indexed_at or now_utc
-                    job.repository_version_id = existing_ver.id
+                # If the repository is already indexed at this commit SHA, complete immediately
+                if repo.commit_sha == commit_sha and repo.status == "ready":
                     job.status = "completed"
                     job.current_stage = "completed"
                     job.progress = 100
@@ -82,20 +68,8 @@ class IndexingService:
                     await db.commit()
                     return
 
-                if existing_ver:
-                    ver = existing_ver
-                    ver.status = "pending"
-                    ver.error_message = None
-                else:
-                    ver = RepositoryVersion(
-                        id=uuid.uuid4(),
-                        repository_id=repo.id,
-                        commit_sha=commit_sha,
-                        status="pending"
-                    )
-                    db.add(ver)
-
-                job.repository_version_id = ver.id
+                # Clear previous indexed files & symbols for this repository before writing new ones
+                await db.execute(delete(FileModel).where(FileModel.repository_id == repo.id))
                 await db.commit()
 
                 file_pairs = self.git.scan_files(repo_dir)
@@ -103,8 +77,6 @@ class IndexingService:
 
                 files_to_add = []
                 symbols_to_add = []
-                class_cnt = 0
-                method_cnt = 0
 
                 for rel_path, abs_path in file_pairs:
                     try:
@@ -117,21 +89,17 @@ class IndexingService:
 
                         file_rec = FileModel(
                             id=file_uuid,
-                            repository_version_id=ver.id,
+                            repository_id=repo.id,
                             path=rel_path,
                             language=ext or "text",
                             content=code,
-                            content_hash=chash
+                            content_hash=chash,
                         )
                         files_to_add.append(file_rec)
 
                         parsed_syms = self.parser.parse_file(rel_path, code, ext)
                         for sym_data in parsed_syms:
                             stype = sym_data.get("symbol_type", "function")
-                            if stype in ("class", "interface", "component", "model"):
-                                class_cnt += 1
-                            else:
-                                method_cnt += 1
 
                             sym_rec = SymbolModel(
                                 id=uuid.uuid4(),
@@ -141,7 +109,7 @@ class IndexingService:
                                 signature=sym_data.get("signature"),
                                 source_code=sym_data.get("source_code", ""),
                                 start_line=sym_data.get("start_line", 1),
-                                end_line=sym_data.get("end_line", 1)
+                                end_line=sym_data.get("end_line", 1),
                             )
                             symbols_to_add.append(sym_rec)
                     except Exception as file_err:
@@ -176,12 +144,9 @@ class IndexingService:
                         db.add(symbol_rec)
 
                     now_utc = datetime.now(timezone.utc)
-                    ver.status = "active"
-                    ver.file_count = len(files_to_add)
-                    ver.symbol_count = len(symbols_to_add)
-                    ver.indexed_at = now_utc
-
-                    repo.current_version_id = ver.id
+                    repo.commit_sha = commit_sha
+                    repo.file_count = len(files_to_add)
+                    repo.symbol_count = len(symbols_to_add)
                     repo.status = "ready"
                     repo.indexed_at = now_utc
 
@@ -193,23 +158,17 @@ class IndexingService:
             except Exception as err:
                 logger.error("Repository indexing pipeline failed for job %s: %s", job_id_str, err, exc_info=True)
                 await db.rollback()
+
                 stmt_job_err = select(IndexingJob).where(IndexingJob.id == job_uuid)
                 job_err = (await db.execute(stmt_job_err)).scalars().first()
                 if job_err:
                     job_err.status = "failed"
                     job_err.error_message = str(err)
 
-                if ver and ver.id:
-                    stmt_ver_err = select(RepositoryVersion).where(RepositoryVersion.id == ver.id)
-                    ver_err = (await db.execute(stmt_ver_err)).scalars().first()
-                    if ver_err:
-                        ver_err.status = "failed"
-                        ver_err.error_message = str(err)
-
                 stmt_repo_err = select(Repository).where(Repository.id == job.repository_id)
                 repo_err = (await db.execute(stmt_repo_err)).scalars().first()
                 if repo_err:
-                    if repo_err.current_version_id is not None:
+                    if repo_err.commit_sha is not None and repo_err.file_count > 0:
                         repo_err.status = "ready"
                     else:
                         repo_err.status = "error"
@@ -218,5 +177,6 @@ class IndexingService:
             finally:
                 if repo_dir:
                     self.git.cleanup(repo_dir)
+
 
 indexing_service = IndexingService()
