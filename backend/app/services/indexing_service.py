@@ -1,6 +1,5 @@
 import os
 import uuid
-import hashlib
 import logging
 from datetime import datetime, timezone
 from sqlalchemy import select, delete
@@ -84,7 +83,6 @@ class IndexingService:
                             code = file_handle.read()
 
                         ext = os.path.splitext(rel_path)[1].lower()
-                        chash = hashlib.sha256(code.encode("utf-8")).hexdigest()
                         file_uuid = uuid.uuid4()
 
                         file_rec = FileModel(
@@ -93,7 +91,6 @@ class IndexingService:
                             path=rel_path,
                             language=ext or "text",
                             content=code,
-                            content_hash=chash,
                         )
                         files_to_add.append(file_rec)
 

@@ -14,7 +14,7 @@ import uuid
 async def reset_db_and_seed():
     print("1. Wiping entire database...")
     async with AsyncSessionLocal() as session:
-        await session.execute(text("TRUNCATE TABLE chats, indexing_jobs, symbols, files, repository_versions, repositories CASCADE;"))
+        await session.execute(text("TRUNCATE TABLE chats, indexing_jobs, symbols, files, repositories CASCADE;"))
         await session.commit()
     print("Database wiped clean!")
 
@@ -33,7 +33,6 @@ async def reset_db_and_seed():
         job = IndexingJob(
             id=job_id,
             repository_id=repo_id,
-            job_type="full_index",
             status="queued",
             progress=0,
             current_stage="queued"

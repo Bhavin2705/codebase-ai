@@ -1,5 +1,4 @@
 import logging
-import os
 import re
 from typing import Any, Dict, List
 import httpx
@@ -15,13 +14,11 @@ class LLMService:
 
     @property
     def nim_api_key(self) -> str:
-        return os.getenv("NVIDIA_NIM_API_KEY") or getattr(
-            settings, "NVIDIA_NIM_API_KEY", ""
-        )
+        return getattr(settings, "NVIDIA_NIM_API_KEY", "")
 
     @property
     def nim_base_url(self) -> str:
-        return os.getenv("NVIDIA_NIM_BASE_URL") or getattr(
+        return getattr(
             settings,
             "NVIDIA_NIM_BASE_URL",
             "https://integrate.api.nvidia.com/v1",
@@ -29,7 +26,7 @@ class LLMService:
 
     @property
     def nim_model(self) -> str:
-        return os.getenv("NVIDIA_NIM_CHAT_MODEL") or getattr(
+        return getattr(
             settings,
             "NVIDIA_NIM_CHAT_MODEL",
             "meta/llama-3.1-70b-instruct",
@@ -37,13 +34,11 @@ class LLMService:
 
     @property
     def gemini_api_key(self) -> str:
-        return os.getenv("GEMINI_API_KEY") or getattr(
-            settings, "GEMINI_API_KEY", ""
-        )
+        return getattr(settings, "GEMINI_API_KEY", "")
 
     @property
     def gemini_model(self) -> str:
-        return os.getenv("GEMINI_MODEL") or getattr(
+        return getattr(
             settings,
             "GEMINI_MODEL",
             "gemini-2.0-flash",

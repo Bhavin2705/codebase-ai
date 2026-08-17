@@ -122,7 +122,6 @@ async def import_repository(
     indexing_job = IndexingJob(
         id=job_id,
         repository_id=repository_id,
-        job_type="full_index",
         status="pending",
         current_stage="cloning"
     )

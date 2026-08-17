@@ -11,7 +11,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from app.database import AsyncSessionLocal
 from app.models.repository import Repository
-from app.models.repository_version import RepositoryVersion
 from app.models.file import File
 from app.models.symbol import Symbol
 from app.services.retrieval_service import retrieval_service
@@ -46,16 +45,25 @@ def make_vec(seed_text: str) -> list[float]:
     return [round(x / norm, 6) for x in raw]
 
 async def seed_eval_repo(db):
-    repo_id, ver_id = uuid.uuid4(), uuid.uuid4()
+    repo_id = uuid.uuid4()
     now = datetime.now(timezone.utc)
-    repo = Repository(id=repo_id, name=f"eval-repo-{repo_id.hex[:6]}", github_url=f"https://github.com/eval/repo-{repo_id.hex[:6]}", language="Java", status="ready", current_version_id=ver_id, indexed_at=now)
-    ver = RepositoryVersion(id=ver_id, repository_id=repo_id, commit_sha="eval123", file_count=len(QUERIES), symbol_count=len(QUERIES)*2, status="active", indexed_at=now)
-    db.add_all([repo, ver])
+    repo = Repository(
+        id=repo_id,
+        name=f"eval-repo-{repo_id.hex[:6]}",
+        github_url=f"https://github.com/eval/repo-{repo_id.hex[:6]}",
+        language="Java",
+        status="ready",
+        commit_sha="eval123",
+        file_count=len(QUERIES),
+        symbol_count=len(QUERIES) * 2,
+        indexed_at=now,
+    )
+    db.add(repo)
 
     for qid, query, filename, symbols in QUERIES:
         file_path = f"src/main/java/org/petclinic/{filename}"
         fid = uuid.uuid4()
-        db.add(File(id=fid, repository_version_id=ver_id, path=file_path, language="java", content=f"// {filename}", content_hash=fid.hex))
+        db.add(File(id=fid, repository_id=repo_id, path=file_path, language="java", content=f"// {filename}"))
         for sym_name in symbols:
             # Seed 768-dim vector embeddings on Symbol model to exercise pgvector similarity search
             sym_vec = make_vec(sym_name)

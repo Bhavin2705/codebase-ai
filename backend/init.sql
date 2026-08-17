@@ -19,7 +19,6 @@ CREATE TABLE IF NOT EXISTS files (
     path VARCHAR(1024) NOT NULL,
     language VARCHAR(50) NOT NULL,
     content TEXT,
-    content_hash VARCHAR(64),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uix_repo_file_path UNIQUE (repository_id, path)
 );
@@ -40,7 +39,6 @@ CREATE TABLE IF NOT EXISTS symbols (
 CREATE TABLE IF NOT EXISTS indexing_jobs (
     id UUID PRIMARY KEY,
     repository_id UUID NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-    job_type VARCHAR(50) NOT NULL DEFAULT 'full_index',
     status VARCHAR(50) NOT NULL DEFAULT 'queued',
     progress INT NOT NULL DEFAULT 0,
     current_stage VARCHAR(100),

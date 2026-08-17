@@ -19,7 +19,6 @@ class File(Base):
     path: Mapped[str] = mapped_column(String(1024), nullable=False)
     language: Mapped[str] = mapped_column(String(50), nullable=False)
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
-    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False)
 
     repository: Mapped["Repository"] = relationship("Repository", back_populates="files")
