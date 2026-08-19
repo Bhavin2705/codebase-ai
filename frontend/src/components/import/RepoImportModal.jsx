@@ -1,10 +1,43 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { API_BASE_URL, getAuthHeaders } from '../../config';
+
+function cleanGitUrl(url) {
+  if (!url || !url.trim()) return url;
+  let trimmed = url.trim();
+
+  // If already starts with valid http:// or https://, leave unchanged
+  if (trimmed.startsWith('https://') || trimmed.startsWith('http://')) {
+    return trimmed;
+  }
+
+  // Clean broken protocols like "https: / /", "https: /", "https: //", "http: /"
+  if (/^https?[\s:]/i.test(trimmed)) {
+    return trimmed.replace(/^(https?)\s*:\s*(?:\/\s*)+/i, (m, proto) => `${proto.toLowerCase()}://`);
+  }
+
+  // Auto-prepend https:// for naked domains like github.com/...
+  if (trimmed.startsWith('github.com')) {
+    return `https://${trimmed}`;
+  }
+
+  return trimmed;
+}
 
 export default function RepoImportModal({ isOpen, onClose, onStartIndexing }) {
   const [repoUrl, setRepoUrl] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Debounce check: after user stops typing for 1.5s, verify/clean protocol
+  useEffect(() => {
+    if (!repoUrl || repoUrl.length < 5) return;
+
+    const timer = setTimeout(() => {
+      setRepoUrl((current) => cleanGitUrl(current));
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [repoUrl]);
 
   if (!isOpen) return null;
 
@@ -12,13 +45,14 @@ export default function RepoImportModal({ isOpen, onClose, onStartIndexing }) {
     e.preventDefault();
     setError('');
 
+    const cleanUrl = cleanGitUrl(repoUrl);
     const githubRegex = /^https?:\/\/(www\.)?github\.com\/[\w.-]+\/[\w.-]+(\.git)?$/i;
-    if (!repoUrl.trim()) {
+    if (!cleanUrl) {
       setError('Please provide a public GitHub repository URL.');
       return;
     }
 
-    if (!githubRegex.test(repoUrl.trim())) {
+    if (!githubRegex.test(cleanUrl)) {
       setError('Malformed GitHub URL. Format must be: https://github.com/owner/repository');
       return;
     }
@@ -28,7 +62,7 @@ export default function RepoImportModal({ isOpen, onClose, onStartIndexing }) {
       const res = await fetch(`${API_BASE_URL}/repositories`, {
         method: 'POST',
         headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ github_url: repoUrl.trim() })
+        body: JSON.stringify({ github_url: cleanUrl })
       });
 
       if (!res.ok) {
@@ -87,6 +121,7 @@ export default function RepoImportModal({ isOpen, onClose, onStartIndexing }) {
               placeholder="https://github.com/spring-projects/spring-petclinic"
               value={repoUrl}
               onChange={(e) => setRepoUrl(e.target.value)}
+              onBlur={() => setRepoUrl((current) => cleanGitUrl(current))}
               disabled={loading}
             />
             {error && (

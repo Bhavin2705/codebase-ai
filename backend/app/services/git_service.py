@@ -14,7 +14,9 @@ except ImportError:
     HAS_GIT = False
 
 ALLOWED_EXT = {".java", ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".md", ".xml", ".json", ".properties", ".yaml", ".yml"}
-IGNORE_DIRS = {".git", "node_modules", "target", "build", "__pycache__", ".venv", "dist", ".idea"}
+IGNORE_DIRS = {".git", "node_modules", "target", "build", "__pycache__", ".venv", "venv", "dist", ".idea", ".vscode", "coverage", ".next", ".nuxt", "out", ".turbo", "vendor"}
+IGNORE_FILES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "Pipfile.lock", "composer.lock", "Cargo.lock", "Gemfile.lock"}
+MAX_FILE_BYTES = 300 * 1024
 
 class GitService:
     def check_repository_accessible(self, url: str, timeout: int = 5) -> bool:
@@ -28,26 +30,28 @@ class GitService:
                 env=env
             )
             return res.returncode == 0
-        except Exception as err:
-            logger.debug("git ls-remote failed for %s: %s", url, err)
+        except Exception:
             return False
 
     def clone_repository(self, url: str) -> str:
-        repo_dir = tempfile.mkdtemp(prefix="repo_clone_")
-        if HAS_GIT:
-            try:
-                Repo.clone_from(url, repo_dir, depth=1)
-                return repo_dir
-            except Exception as git_err:
-                logger.debug("GitPython clone failed for %s, trying git CLI: %s", url, git_err)
+        repo_dir = tempfile.mkdtemp(prefix="repo_")
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         try:
-            res = subprocess.run(["git", "clone", "--depth=1", url, repo_dir], capture_output=True, text=True)
+            res = subprocess.run(
+                ["git", "clone", "--depth", "1", url, repo_dir],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env=env
+            )
             if res.returncode == 0:
                 return repo_dir
-            logger.debug("git clone CLI failed: %s", res.stderr.strip())
-        except Exception as proc_err:
-            logger.debug("subprocess git clone failed for %s: %s", url, proc_err)
-        return repo_dir
+            raise RuntimeError(
+                f"git clone failed with exit code {res.returncode}: {res.stderr.strip()}"
+            )
+        except Exception:
+            self.cleanup(repo_dir)
+            raise
 
     def get_commit_sha(self, repo_dir: str) -> str:
         if HAS_GIT and os.path.exists(os.path.join(repo_dir, ".git")):
@@ -69,9 +73,16 @@ class GitService:
         for root_path, directory_names, file_names in os.walk(repo_dir):
             directory_names[:] = [dir_name for dir_name in directory_names if dir_name not in IGNORE_DIRS]
             for file_name in file_names:
+                if file_name in IGNORE_FILES:
+                    continue
                 extension = os.path.splitext(file_name)[1].lower()
                 if extension in ALLOWED_EXT:
                     absolute_path = os.path.join(root_path, file_name)
+                    try:
+                        if os.path.getsize(absolute_path) > MAX_FILE_BYTES:
+                            continue
+                    except OSError:
+                        pass
                     relative_path = os.path.relpath(absolute_path, repo_dir).replace("\\", "/")
                     file_pairs.append((relative_path, absolute_path))
         return file_pairs

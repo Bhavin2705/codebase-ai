@@ -10,34 +10,11 @@ export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const [repositories, setRepositories] = useState(() => {
-    try {
-      const cached = localStorage.getItem('app_repositories');
-      return cached ? JSON.parse(cached) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [selectedRepo, setSelectedRepo] = useState(() => {
-    try {
-      const cachedId = localStorage.getItem('app_selected_repo_id');
-      const cachedList = JSON.parse(localStorage.getItem('app_repositories') || '[]');
-      return cachedList.find((r) => r.id === cachedId) || cachedList[0] || null;
-    } catch {
-      return null;
-    }
-  });
-
+  const [repositories, setRepositories] = useState([]);
+  const [selectedRepo, setSelectedRepo] = useState(null);
   const [isImportOpen, setIsImportOpen] = useState(false);
 
-  // Sync state to localStorage
-  useEffect(() => {
-    try {
-      localStorage.setItem('app_repositories', JSON.stringify(repositories));
-    } catch {}
-  }, [repositories]);
-
+  // Remember selected repo ID across reloads
   useEffect(() => {
     if (selectedRepo?.id) {
       try {
@@ -57,21 +34,52 @@ export default function App() {
     }
   }, [location.pathname, repositories, selectedRepo]);
 
-  // Fetch repositories from live API
-  useEffect(() => {
-    fetch(`${API_BASE_URL}/repositories`)
+  // Fetch repositories from live API (single source of truth)
+  const refreshRepositories = () => {
+    return fetch(`${API_BASE_URL}/repositories`)
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => {
-        if (Array.isArray(data) && data.length > 0) {
+        if (Array.isArray(data)) {
           setRepositories(data);
           setSelectedRepo((prev) => {
-            const found = data.find((r) => r.id === prev?.id || r.name === prev?.name);
-            return found || data[0];
+            if (!data.length) return null;
+            if (location.pathname.startsWith('/workspace/')) {
+              const urlRepoId = location.pathname.split('/workspace/')[1];
+              if (urlRepoId) {
+                const found = data.find((r) => r.id === urlRepoId);
+                if (found) return found;
+              }
+            }
+            if (prev) {
+              const found = data.find((r) => r.id === prev.id || r.name === prev.name);
+              if (found) return found;
+            }
+            const cachedId = localStorage.getItem('app_selected_repo_id');
+            if (cachedId) {
+              const found = data.find((r) => r.id === cachedId);
+              if (found) return found;
+            }
+            return data[0];
           });
         }
       })
       .catch((err) => console.error('Failed to fetch repositories list:', err));
+  };
+
+  useEffect(() => {
+    refreshRepositories();
   }, []);
+
+  // Polling while any repository is indexing / pending
+  useEffect(() => {
+    const hasActiveIndexing = repositories.some(
+      (r) => r.status && r.status !== 'ready' && r.status !== 'error' && r.status !== 'failed'
+    );
+
+    const intervalTime = hasActiveIndexing ? 1000 : 5000;
+    const interval = setInterval(refreshRepositories, intervalTime);
+    return () => clearInterval(interval);
+  }, [repositories]);
 
   const handleSelectRepo = (repo) => {
     setSelectedRepo(repo);
@@ -82,16 +90,21 @@ export default function App() {
 
   const handleStartIndexing = (repoObj) => {
     setIsImportOpen(false);
+    const initialObj = {
+      ...repoObj,
+      status: 'indexing',
+    };
     setRepositories((prev) => {
-      const idx = prev.findIndex((r) => r.id === repoObj.id);
+      const idx = prev.findIndex((r) => r.id === repoObj.id || (repoObj.name && r.name === repoObj.name));
       if (idx >= 0) {
         const copy = [...prev];
-        copy[idx] = repoObj;
+        copy[idx] = initialObj;
         return copy;
       }
-      return [repoObj, ...prev];
+      return [initialObj, ...prev];
     });
-    setSelectedRepo(repoObj);
+    setSelectedRepo(initialObj);
+    setTimeout(refreshRepositories, 1000);
 
     if (location.pathname.startsWith('/workspace')) {
       navigate(`/workspace/${repoObj.id}`);
@@ -113,6 +126,7 @@ export default function App() {
           element={
             <RepoOverview
               repo={selectedRepo}
+              repositories={repositories}
               onSelectQuestion={(q) => {
                 const dest = selectedRepo?.id ? `/workspace/${selectedRepo.id}` : '/workspace';
                 navigate(dest, { state: { initialQuestion: q } });

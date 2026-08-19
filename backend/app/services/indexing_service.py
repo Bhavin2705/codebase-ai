@@ -1,8 +1,11 @@
 import os
 import uuid
 import logging
+import asyncio
+import gc
 from datetime import datetime, timezone
-from sqlalchemy import select, delete
+import numpy as np
+from sqlalchemy import select, delete, insert
 
 from app.database import AsyncSessionLocal
 from app.models.repository import Repository
@@ -48,9 +51,11 @@ class IndexingService:
                 job.status = "running"
                 job.current_stage = "cloning"
                 job.progress = 10
-                await db.commit()
 
                 repo_dir = self.git.clone_repository(repo.github_url)
+                if not repo_dir or not os.path.isdir(repo_dir):
+                    raise RuntimeError("Repository clone did not produce a valid directory")
+
                 commit_sha = self.git.get_commit_sha(repo_dir)
 
                 job.current_stage = "parsing"
@@ -69,13 +74,17 @@ class IndexingService:
 
                 # Clear previous indexed files & symbols for this repository before writing new ones
                 await db.execute(delete(FileModel).where(FileModel.repository_id == repo.id))
-                await db.commit()
 
                 file_pairs = self.git.scan_files(repo_dir)
+                if not file_pairs:
+                    raise RuntimeError(
+                        "Repository contains no supported source files to index"
+                    )
+
                 repo.language = detect_language(file_pairs)
 
-                files_to_add = []
-                symbols_to_add = []
+                files_data = []
+                symbols_data = []
 
                 for rel_path, abs_path in file_pairs:
                     try:
@@ -85,72 +94,111 @@ class IndexingService:
                         ext = os.path.splitext(rel_path)[1].lower()
                         file_uuid = uuid.uuid4()
 
-                        file_rec = FileModel(
-                            id=file_uuid,
-                            repository_id=repo.id,
-                            path=rel_path,
-                            language=ext or "text",
-                            content=code,
-                        )
-                        files_to_add.append(file_rec)
+                        files_data.append({
+                            "id": file_uuid,
+                            "repository_id": repo.id,
+                            "path": rel_path,
+                            "language": ext or "text",
+                            "content": code,
+                        })
 
                         parsed_syms = self.parser.parse_file(rel_path, code, ext)
                         for sym_data in parsed_syms:
                             stype = sym_data.get("symbol_type", "function")
 
-                            sym_rec = SymbolModel(
-                                id=uuid.uuid4(),
-                                file_id=file_uuid,
-                                name=sym_data.get("name", "unknown"),
-                                symbol_type=stype,
-                                signature=sym_data.get("signature"),
-                                source_code=sym_data.get("source_code", ""),
-                                start_line=sym_data.get("start_line", 1),
-                                end_line=sym_data.get("end_line", 1),
-                            )
-                            symbols_to_add.append(sym_rec)
+                            symbols_data.append({
+                                "id": uuid.uuid4(),
+                                "file_id": file_uuid,
+                                "name": sym_data.get("name", "unknown"),
+                                "symbol_type": stype,
+                                "signature": sym_data.get("signature"),
+                                "source_code": sym_data.get("source_code", ""),
+                                "start_line": sym_data.get("start_line", 1),
+                                "end_line": sym_data.get("end_line", 1),
+                                "embedding": None,
+                            })
                     except Exception as file_err:
                         logger.warning("Failed to parse file %s: %s", rel_path, file_err)
 
+                if not files_data:
+                    raise RuntimeError("No supported files were successfully parsed")
+
+                if not symbols_data:
+                    raise RuntimeError("No code symbols/chunks were extracted from the repository")
+
                 job.current_stage = "embedding"
                 job.progress = 60
+
+                symbols_with_code_indices = [
+                    i for i, sym in enumerate(symbols_data)
+                    if sym["source_code"] and sym["source_code"].strip()
+                ]
+
+                if symbols_with_code_indices:
+                    texts = [symbols_data[i]["source_code"] for i in symbols_with_code_indices]
+                    embeddings = await self.embedder.generate_embeddings_batch(texts, batch_size=150)
+                    for idx, emb in zip(symbols_with_code_indices, embeddings):
+                        symbols_data[idx]["embedding"] = emb
+
+                now_utc = datetime.now(timezone.utc)
+
+                if files_data:
+                    for f_batch in [files_data[i:i+500] for i in range(0, len(files_data), 500)]:
+                        await db.execute(insert(FileModel), f_batch)
+
+                if symbols_data:
+                    raw_conn = await db.connection()
+                    dbapi_conn = await raw_conn.get_raw_connection()
+                    asyncpg_conn = getattr(
+                        dbapi_conn,
+                        "driver_connection",
+                        getattr(dbapi_conn, "_connection", None),
+                    )
+
+                    records = [
+                        (
+                            s["id"],
+                            s["file_id"],
+                            s["name"],
+                            s["symbol_type"],
+                            s["signature"],
+                            s["source_code"],
+                            s["start_line"],
+                            s["end_line"],
+                            np.array(s["embedding"], dtype=np.float32) if s["embedding"] is not None else None,
+                            now_utc,
+                        )
+                        for s in symbols_data
+                    ]
+
+                    await asyncpg_conn.copy_records_to_table(
+                        "symbols",
+                        records=records,
+                        columns=[
+                            "id",
+                            "file_id",
+                            "name",
+                            "symbol_type",
+                            "signature",
+                            "source_code",
+                            "start_line",
+                            "end_line",
+                            "embedding",
+                            "created_at",
+                        ],
+                    )
+
+                repo.commit_sha = commit_sha
+                repo.file_count = len(files_data)
+                repo.symbol_count = len(symbols_data)
+                repo.status = "ready"
+                repo.indexed_at = now_utc
+
+                job.status = "completed"
+                job.current_stage = "completed"
+                job.progress = 100
+                job.completed_at = now_utc
                 await db.commit()
-
-                symbols_with_code = [sym for sym in symbols_to_add if sym.source_code]
-                embedding_failures = 0
-
-                for sym in symbols_with_code:
-                    try:
-                        emb = await self.embedder.generate_embedding(sym.source_code)
-                        sym.embedding = emb
-                    except Exception as emb_err:
-                        embedding_failures += 1
-                        logger.error("Failed to generate embedding for symbol %s: %s", sym.name, emb_err)
-
-                if symbols_with_code and embedding_failures == len(symbols_with_code):
-                    raise RuntimeError(f"Embedding pipeline failed for all {len(symbols_with_code)} symbols")
-
-                job.current_stage = "storing"
-                job.progress = 90
-                await db.commit()
-
-                async with db.begin():
-                    for file_rec in files_to_add:
-                        db.add(file_rec)
-                    for symbol_rec in symbols_to_add:
-                        db.add(symbol_rec)
-
-                    now_utc = datetime.now(timezone.utc)
-                    repo.commit_sha = commit_sha
-                    repo.file_count = len(files_to_add)
-                    repo.symbol_count = len(symbols_to_add)
-                    repo.status = "ready"
-                    repo.indexed_at = now_utc
-
-                    job.status = "completed"
-                    job.current_stage = "completed"
-                    job.progress = 100
-                    job.completed_at = now_utc
 
             except Exception as err:
                 logger.error("Repository indexing pipeline failed for job %s: %s", job_id_str, err, exc_info=True)
@@ -174,6 +222,7 @@ class IndexingService:
             finally:
                 if repo_dir:
                     self.git.cleanup(repo_dir)
+                gc.collect()
 
 
 indexing_service = IndexingService()

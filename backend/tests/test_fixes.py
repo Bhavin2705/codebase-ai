@@ -43,12 +43,14 @@ async def test_reindexing_already_indexed_commit():
         db.add(job)
         await db.commit()
 
-    with pytest.MonkeyPatch.context() as m:
-        m.setattr(indexing_service.git, "clone_repository", lambda url: "/tmp/fake_dir")
-        m.setattr(indexing_service.git, "get_commit_sha", lambda dir: commit_sha)
-        m.setattr(indexing_service.git, "cleanup", lambda dir: None)
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        with pytest.MonkeyPatch.context() as m:
+            m.setattr(indexing_service.git, "clone_repository", lambda url: tmp_dir)
+            m.setattr(indexing_service.git, "get_commit_sha", lambda dir: commit_sha)
+            m.setattr(indexing_service.git, "cleanup", lambda dir: None)
 
-        await indexing_service.run_pipeline(str(job_id))
+            await indexing_service.run_pipeline(str(job_id))
 
     async with AsyncSessionLocal() as db:
         res_job = (await db.execute(select(IndexingJob).where(IndexingJob.id == job_id))).scalars().first()
@@ -222,8 +224,8 @@ async def test_embedding_failure_fails_indexing_job():
             db.add(job)
             await db.commit()
 
-        async def mock_fail_embedding(text):
-            raise RuntimeError("Simulated embedding provider failure")
+        async def mock_fail_embedding(*args, **kwargs):
+            raise RuntimeError("Embedding pipeline failed: simulated failure")
 
         test_commit_sha = uuid.uuid4().hex
 
@@ -231,7 +233,7 @@ async def test_embedding_failure_fails_indexing_job():
             m.setattr(indexing_service.git, "clone_repository", lambda url: tmp_dir)
             m.setattr(indexing_service.git, "get_commit_sha", lambda dir: test_commit_sha)
             m.setattr(indexing_service.git, "scan_files", lambda dir: [("main.py", main_py_path)])
-            m.setattr(indexing_service.embedder, "generate_embedding", mock_fail_embedding)
+            m.setattr(indexing_service.embedder, "generate_embeddings_batch", mock_fail_embedding)
             m.setattr(indexing_service.git, "cleanup", lambda dir: None)
 
             await indexing_service.run_pipeline(str(job_id))

@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Folder, FileCode, FileText } from 'lucide-react';
+import { Folder, FolderOpen, ChevronRight, ChevronDown, FileCode, FileText } from 'lucide-react';
 import { API_BASE_URL } from '../../config';
 
-export default function NavPanel({ selectedRepo, onSelectFile }) {
-  const repoId = selectedRepo?.id;
+export default function NavPanel({ repoId: propRepoId, selectedRepo, onSelectFile }) {
+  const repoId = propRepoId || selectedRepo?.id;
   const [tree, setTree] = useState([]);
+  const [collapsedPaths, setCollapsedPaths] = useState(new Set());
 
   useEffect(() => {
     if (!repoId) {
       setTree([]);
+      setCollapsedPaths(new Set());
       return;
     }
 
@@ -23,22 +25,49 @@ export default function NavPanel({ selectedRepo, onSelectFile }) {
         console.error('Failed to fetch repo tree:', err);
         setTree([]);
       });
-  }, [repoId]);
+  }, [repoId, selectedRepo?.status, selectedRepo?.stats?.files, selectedRepo?.file_count]);
 
-  const renderTree = (nodes) => {
+  const toggleFolder = (folderKey) => {
+    setCollapsedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderKey)) {
+        next.delete(folderKey);
+      } else {
+        next.add(folderKey);
+      }
+      return next;
+    });
+  };
+
+  const renderTree = (nodes, parentPath = '') => {
     if (!Array.isArray(nodes)) return null;
     return nodes.map((node, i) => {
       const isDir = node.type === 'dir' || node.type === 'folder' || Boolean(node.children);
       const name = node.name || (node.path ? node.path.split('/').pop() : 'folder');
+      const nodeKey = node.path || (parentPath ? `${parentPath}/${name}` : `${name}-${i}`);
 
       if (isDir) {
+        const isCollapsed = collapsedPaths.has(nodeKey);
         return (
-          <div key={i} style={{ marginLeft: '6px' }}>
-            <div className="tree-node dir">
-              <Folder size={14} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
+          <div key={nodeKey || i} style={{ marginLeft: '6px' }}>
+            <div
+              className="tree-node dir"
+              onClick={() => toggleFolder(nodeKey)}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              {isCollapsed ? (
+                <ChevronRight size={12} style={{ color: 'var(--text-subtle)', flexShrink: 0 }} />
+              ) : (
+                <ChevronDown size={12} style={{ color: 'var(--text-subtle)', flexShrink: 0 }} />
+              )}
+              {isCollapsed ? (
+                <Folder size={14} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
+              ) : (
+                <FolderOpen size={14} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
+              )}
               <span>{name}</span>
             </div>
-            {node.children && node.children.length > 0 && renderTree(node.children)}
+            {!isCollapsed && node.children && node.children.length > 0 && renderTree(node.children, nodeKey)}
           </div>
         );
       }
@@ -47,7 +76,7 @@ export default function NavPanel({ selectedRepo, onSelectFile }) {
 
       return (
         <div 
-          key={i} 
+          key={node.path || `${parentPath}/${name}-${i}`} 
           className="tree-node file" 
           onClick={() => onSelectFile && onSelectFile(node.path)}
         >

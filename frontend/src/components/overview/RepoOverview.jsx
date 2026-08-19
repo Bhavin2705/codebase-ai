@@ -2,12 +2,16 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowRight, HelpCircle } from 'lucide-react';
 
-export default function RepoOverview({ repo, onSelectQuestion }) {
+export default function RepoOverview({ repo, repositories, onSelectQuestion }) {
   const navigate = useNavigate();
 
+  const currentRepo = (repositories && repo)
+    ? (repositories.find((r) => r.id === repo.id || (repo.name && r.name === repo.name)) || repo)
+    : repo;
+
   const handleOpenWorkspace = () => {
-    if (repo?.id) {
-      navigate(`/workspace/${repo.id}`);
+    if (currentRepo?.id) {
+      navigate(`/workspace/${currentRepo.id}`);
     } else {
       navigate('/workspace');
     }
@@ -17,12 +21,12 @@ export default function RepoOverview({ repo, onSelectQuestion }) {
     if (onSelectQuestion) {
       onSelectQuestion(q);
     } else {
-      navigate(repo?.id ? `/workspace/${repo.id}` : '/workspace');
+      navigate(currentRepo?.id ? `/workspace/${currentRepo.id}` : '/workspace');
     }
   };
 
   const getStarterQuestions = () => {
-    const lang = repo?.language ? repo.language.toLowerCase() : '';
+    const lang = currentRepo?.language ? currentRepo.language.toLowerCase() : '';
 
     if (lang.includes('python')) {
       return [
@@ -55,9 +59,19 @@ export default function RepoOverview({ repo, onSelectQuestion }) {
     ];
   };
 
+  const getDisplayStatus = (status) => {
+    if (!status || status === 'ready' || status === 'indexed' || status === 'completed') {
+      return 'indexed';
+    }
+    if (status === 'error' || status === 'failed') {
+      return 'error';
+    }
+    return 'indexing...';
+  };
+
   const questions = getStarterQuestions();
 
-  if (!repo) {
+  if (!currentRepo) {
     return (
       <div className="overview-container">
         <div className="overview-card" style={{ textAlign: 'center', padding: '40px 20px' }}>
@@ -78,10 +92,10 @@ export default function RepoOverview({ repo, onSelectQuestion }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h1 style={{ fontSize: '18px', fontWeight: 600, color: 'var(--text-main)', letterSpacing: '-0.2px' }}>
-              {repo.name}
+              {currentRepo.name}
             </h1>
             <p style={{ color: 'var(--text-subtle)', fontSize: '12px', marginTop: '2px', fontFamily: 'var(--font-mono)' }}>
-              {repo.github_url || ''}
+              {currentRepo.github_url || ''}
             </p>
           </div>
           <button className="btn btn-primary" onClick={handleOpenWorkspace} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
@@ -100,20 +114,28 @@ export default function RepoOverview({ repo, onSelectQuestion }) {
         }}>
           <div>
             <div style={{ fontSize: '10px', color: 'var(--text-subtle)', letterSpacing: '0.5px' }}>PRIMARY LANGUAGE</div>
-            <div className="stat-metric">{repo.language || 'Multi-Language'}</div>
+            <div className="stat-metric">{currentRepo.language || 'Multi-Language'}</div>
           </div>
           <div>
             <div style={{ fontSize: '10px', color: 'var(--text-subtle)', letterSpacing: '0.5px' }}>INDEXED FILES</div>
-            <div className="stat-metric">{repo.stats?.files ?? repo.file_count ?? 0} Files</div>
+            <div className="stat-metric">{currentRepo.stats?.files ?? currentRepo.file_count ?? 0} Files</div>
           </div>
           <div>
             <div style={{ fontSize: '10px', color: 'var(--text-subtle)', letterSpacing: '0.5px' }}>EXTRACTED SYMBOLS</div>
-            <div className="stat-metric">{repo.stats?.symbols ?? repo.stats?.classes ?? repo.symbol_count ?? 0} Symbols</div>
+            <div className="stat-metric">{currentRepo.stats?.symbols ?? currentRepo.stats?.classes ?? currentRepo.symbol_count ?? 0} Symbols</div>
           </div>
           <div>
             <div style={{ fontSize: '10px', color: 'var(--text-subtle)', letterSpacing: '0.5px' }}>STATUS</div>
-            <div className="stat-metric" style={{ fontSize: '11px', color: 'var(--accent-cyan)' }}>
-              {repo.status || 'ready'}
+            <div
+              className="stat-metric"
+              style={{
+                fontSize: '11px',
+                color: (currentRepo.status === 'error' || currentRepo.status === 'failed')
+                  ? '#f87171'
+                  : 'var(--accent-cyan)'
+              }}
+            >
+              {getDisplayStatus(currentRepo.status)}
             </div>
           </div>
         </div>

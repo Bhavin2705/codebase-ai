@@ -7,11 +7,11 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     GEMINI_API_KEY: str
 
-    GEMINI_MODEL: str = "gemini-2.0-flash"
+    GEMINI_MODEL: str = "gemini-3.6-flash"
 
     NVIDIA_NIM_API_KEY: str = ""
     NVIDIA_NIM_BASE_URL: str = "https://integrate.api.nvidia.com/v1"
-    NVIDIA_NIM_CHAT_MODEL: str = "meta/llama-3.1-70b-instruct"
+    NVIDIA_NIM_CHAT_MODEL: str = "meta/llama-3.1-8b-instruct"
     NVIDIA_NIM_EMBED_MODEL: str = "nvidia/nv-embedqa-e5-v5"
 
     API_ACCESS_KEY: str = ""
@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(".env", "backend/.env"),
         extra="ignore",
         case_sensitive=True
     )

@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Clock, Brain, ChevronDown, ChevronUp, FileCode2, MapPin, Send } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Clock, Brain, ChevronDown, ChevronUp, FileCode2, MapPin, Send, RotateCcw, Trash2 } from 'lucide-react';
 
 function LoadingStopwatch() {
   const [elapsed, setElapsed] = useState(0);
@@ -16,15 +16,6 @@ function LoadingStopwatch() {
   const tenthStr = Math.floor((elapsed % 1) * 10);
   const formattedTime = `00:${secStr}.${tenthStr}`;
 
-  let phaseText = 'Indexing query AST tokens & structure...';
-  if (elapsed >= 0.6 && elapsed < 1.5) {
-    phaseText = 'Retrieving matching source code contexts & symbols...';
-  } else if (elapsed >= 1.5) {
-    phaseText = 'Synthesizing grounded explanation via LLM...';
-  }
-
-  const progressPercent = Math.min(95, Math.floor((elapsed / 3) * 100));
-
   return (
     <div className="loading-box">
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -33,15 +24,7 @@ function LoadingStopwatch() {
           <Clock size={12} style={{ color: 'var(--accent-cyan)' }} />
           <span>{formattedTime}</span>
         </div>
-        <span style={{ fontSize: '11px', color: 'var(--text-subtle)', fontFamily: 'var(--font-mono)' }}>Processing Query</span>
-      </div>
-
-      <div className="thinking-phase">
-        {phaseText}
-      </div>
-
-      <div className="progress-bar-container">
-        <div className="progress-bar-fill" style={{ width: `${progressPercent}%` }}></div>
+        <span style={{ fontSize: '11px', color: 'var(--text-subtle)', fontFamily: 'var(--font-mono)' }}>Generating answer...</span>
       </div>
     </div>
   );
@@ -130,14 +113,23 @@ function ThoughtProcessWidget({ thoughtProcess, executionTimeMs }) {
   );
 }
 
-export default function ChatPanel({ conversations, onSelectCitation, onAskQuestion }) {
+export default function ChatPanel({ conversations, onSelectCitation, onAskQuestion, onClearChat }) {
   const [input, setInput] = useState('');
+  const inputRef = useRef(null);
 
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!input.trim()) return;
     onAskQuestion(input.trim());
     setInput('');
+  };
+
+  const handleEditQuestion = (questionText) => {
+    setInput(questionText);
+    if (inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
   };
 
   // Parses markdown headers (###), bold text (**), lists (-), inline code (`code`), and citation markers
@@ -179,28 +171,27 @@ export default function ChatPanel({ conversations, onSelectCitation, onAskQuesti
         const normalizedPath = seg.filePath.replace(/\\/g, '/');
         const fileName = normalizedPath.split('/').pop();
         return (
-          <a
-            key={`inline-cite-${idx}`}
-            className="inline-cite-link"
-            onClick={(e) => {
-              e.preventDefault();
+          <button
+            key={`cite-${idx}-${seg.startLine}`}
+            className="inline-citation"
+            onClick={() =>
               onSelectCitation({
-                id: `cite-${seg.index}`,
-                label: `${fileName}:${seg.startLine}-${seg.endLine}`,
-                filePath: normalizedPath,
+                filePath: seg.filePath,
                 startLine: seg.startLine,
                 endLine: seg.endLine,
-                symbol: seg.labelText
-              });
-            }}
+                label: seg.labelText || `${fileName}:${seg.startLine}`,
+                symbol: fileName
+              })
+            }
           >
-            {seg.labelText}
-          </a>
+            {seg.labelText || `${fileName}:${seg.startLine}-${seg.endLine}`}
+          </button>
         );
       }
 
       // Parse markdown block elements (#, ##, ### headers, **bold**, - lists, code blocks)
-      const lines = seg.content.split('\n');
+      const rawContent = seg.content;
+      const lines = rawContent.split('\n');
       const renderedElements = [];
       let inCodeBlock = false;
       let codeBuffer = [];
@@ -210,9 +201,6 @@ export default function ChatPanel({ conversations, onSelectCitation, onAskQuesti
 
         if (line.startsWith('```')) {
           if (inCodeBlock) {
-            const codeText = codeBuffer.join('\n');
-            codeBuffer = [];
-            inCodeBlock = false;
             renderedElements.push(
               <pre key={`code-${lineIdx}`} style={{
                 background: 'rgba(15, 23, 42, 0.6)',
@@ -224,14 +212,15 @@ export default function ChatPanel({ conversations, onSelectCitation, onAskQuesti
                 fontFamily: 'var(--font-mono)',
                 margin: '8px 0'
               }}>
-                <code>{codeText}</code>
+                <code>{codeBuffer.join('\n')}</code>
               </pre>
             );
-            return;
+            codeBuffer = [];
+            inCodeBlock = false;
           } else {
             inCodeBlock = true;
-            return;
           }
+          return;
         }
 
         if (inCodeBlock) {
@@ -241,14 +230,6 @@ export default function ChatPanel({ conversations, onSelectCitation, onAskQuesti
 
         if (line === '.') return;
 
-        if (line.startsWith('# ')) {
-          renderedElements.push(<h2 key={lineIdx} style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-main)', marginTop: '8px', marginBottom: '4px' }}>{parseInlineMarkdown(line.replace('# ', ''))}</h2>);
-          return;
-        }
-        if (line.startsWith('## ')) {
-          renderedElements.push(<h3 key={lineIdx} style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-main)', marginTop: '8px', marginBottom: '4px' }}>{parseInlineMarkdown(line.replace('## ', ''))}</h3>);
-          return;
-        }
         if (line.startsWith('### ')) {
           renderedElements.push(<h3 key={lineIdx} style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-main)', marginTop: '8px', marginBottom: '4px' }}>{parseInlineMarkdown(line.replace('### ', ''))}</h3>);
           return;
@@ -270,24 +251,6 @@ export default function ChatPanel({ conversations, onSelectCitation, onAskQuesti
           </React.Fragment>
         );
       });
-
-      // Flush any trailing unclosed code block
-      if (inCodeBlock && codeBuffer.length > 0) {
-        renderedElements.push(
-          <pre key="unclosed-code-block" style={{
-            background: 'rgba(15, 23, 42, 0.6)',
-            padding: '10px 14px',
-            borderRadius: '6px',
-            border: '1px solid var(--border-color)',
-            overflowX: 'auto',
-            fontSize: '12px',
-            fontFamily: 'var(--font-mono)',
-            margin: '8px 0'
-          }}>
-            <code>{codeBuffer.join('\n')}</code>
-          </pre>
-        );
-      }
 
       return (
         <span key={`text-block-${idx}`}>
@@ -312,15 +275,68 @@ export default function ChatPanel({ conversations, onSelectCitation, onAskQuesti
 
   return (
     <main className="chat-panel">
+      {conversations.length > 1 && onClearChat && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '10px 20px 0' }}>
+          <button
+            type="button"
+            onClick={onClearChat}
+            style={{
+              background: 'rgba(255,255,255,0.03)',
+              border: '1px solid var(--border-color)',
+              color: 'var(--text-subtle)',
+              fontSize: '11px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px',
+              cursor: 'pointer',
+              padding: '4px 10px',
+              borderRadius: '6px',
+              transition: 'all 0.15s ease'
+            }}
+            title="Clear conversation history"
+          >
+            <Trash2 size={12} />
+            <span>Clear History</span>
+          </button>
+        </div>
+      )}
+
       <div className="chat-messages">
         {conversations.map((msg) => (
           <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div className="message-bubble user">
-              <h2 className="user-question-header">{msg.question}</h2>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
+                <h2 className="user-question-header" style={{ margin: 0, flex: 1 }}>{msg.question}</h2>
+                {!msg.id?.startsWith('init-') && (
+                  <button
+                    type="button"
+                    title="Load question into input to tweak and re-ask"
+                    onClick={() => handleEditQuestion(msg.question)}
+                    style={{
+                      background: 'rgba(56, 189, 248, 0.08)',
+                      border: '1px solid rgba(56, 189, 248, 0.25)',
+                      color: 'var(--accent-cyan)',
+                      borderRadius: '6px',
+                      padding: '3px 8px',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      cursor: 'pointer',
+                      flexShrink: 0,
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <RotateCcw size={11} />
+                    <span>Re-ask</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="message-bubble assistant">
-              {msg.isPending ? (
+              {msg.isPending && !msg.answer ? (
                 <LoadingStopwatch />
               ) : (
                 <>
@@ -331,6 +347,7 @@ export default function ChatPanel({ conversations, onSelectCitation, onAskQuesti
 
                   <div className="answer-body">
                     {renderFormattedAnswer(msg.answer, msg.citations)}
+                    {msg.isPending && <span className="streaming-cursor" style={{ display: 'inline-block', width: '6px', height: '14px', background: 'var(--accent-cyan)', marginLeft: '4px', verticalAlign: 'middle', animation: 'pulse 1s infinite' }}></span>}
                   </div>
 
                   {msg.citations && msg.citations.length > 0 && (
@@ -360,6 +377,7 @@ export default function ChatPanel({ conversations, onSelectCitation, onAskQuesti
       <div className="chat-input-container">
         <form onSubmit={handleSubmit} className="chat-input-box">
           <input
+            ref={inputRef}
             type="text"
             className="chat-input"
             placeholder="Ask codebase architecture or implementation question..."
@@ -375,4 +393,3 @@ export default function ChatPanel({ conversations, onSelectCitation, onAskQuesti
     </main>
   );
 }
-

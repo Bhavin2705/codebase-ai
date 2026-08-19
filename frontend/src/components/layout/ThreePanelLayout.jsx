@@ -61,7 +61,7 @@ export default function ThreePanelLayout({ selectedRepo }) {
   const location = useLocation();
 
   const currentRepoId = repoId || selectedRepo?.id || null;
-  const repoName = selectedRepo?.name || currentRepoId || 'Repository';
+  const repoName = selectedRepo?.name || 'Codebase Workspace';
 
   const [conversations, setConversations] = useState([]);
   const [activeCitation, setActiveCitation] = useState(null);
@@ -84,21 +84,81 @@ export default function ThreePanelLayout({ selectedRepo }) {
     }
   }, [repoId, currentRepoId, navigate]);
 
+  // Hydrate chat history from backend on repository load / page refresh
   useEffect(() => {
     if (!currentRepoId) return;
+
+    const title = selectedRepo?.name
+      ? `Repository Loaded: ${selectedRepo.name}`
+      : (repoName !== 'Codebase Workspace' ? `Repository Loaded: ${repoName}` : 'Repository Loaded');
+
     const initialWelcomeMessage = {
       id: `init-${currentRepoId}`,
       repositoryId: currentRepoId,
-      question: `Repository Loaded: ${repoName}`,
+      question: title,
       answer: `Codebase indexed successfully! You can browse files in the Explorer or ask questions about architecture, functions, endpoints, or implementation details.`,
       citations: [],
       confidence: 'high'
     };
-    setConversations([initialWelcomeMessage]);
+
+    fetch(`${API_BASE_URL}/chat/history/${encodeURIComponent(currentRepoId)}`, {
+      headers: getAuthHeaders(),
+    })
+      .then((res) => (res.ok ? res.json() : []))
+      .then((history) => {
+        if (Array.isArray(history) && history.length > 0) {
+          const loadedMsgs = history.map((item) => ({
+            id: item.id || `hist-${Math.random()}`,
+            repositoryId: currentRepoId,
+            question: item.question,
+            answer: item.answer,
+            citations: item.citations || [],
+            confidence: item.confidence || 'high',
+            isPending: false,
+          }));
+          setConversations([initialWelcomeMessage, ...loadedMsgs]);
+        } else {
+          setConversations((prev) => {
+            if (prev.length === 0) return [initialWelcomeMessage];
+            return prev.map((msg) => {
+              if (msg.id === `init-${currentRepoId}` && selectedRepo?.name) {
+                return { ...msg, question: `Repository Loaded: ${selectedRepo.name}` };
+              }
+              return msg;
+            });
+          });
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to load chat history:', err);
+        setConversations((prev) => (prev.length === 0 ? [initialWelcomeMessage] : prev));
+      });
+
     setActiveCitation(null);
-    // Only re-initialize conversations when switching to a different repository ID
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentRepoId]);
+  }, [currentRepoId, selectedRepo?.name]);
+
+  const handleClearChat = async () => {
+    if (!currentRepoId) return;
+    try {
+      await fetch(`${API_BASE_URL}/chat/history/${encodeURIComponent(currentRepoId)}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      });
+      const title = selectedRepo?.name ? `Repository Loaded: ${selectedRepo.name}` : 'Repository Loaded';
+      setConversations([{
+        id: `init-${currentRepoId}`,
+        repositoryId: currentRepoId,
+        question: title,
+        answer: `Codebase indexed successfully! You can browse files in the Explorer or ask questions about architecture, functions, endpoints, or implementation details.`,
+        citations: [],
+        confidence: 'high'
+      }]);
+      setActiveCitation(null);
+      addToast('History Cleared', 'Chat history has been reset for this workspace.', 'info');
+    } catch (err) {
+      addToast('Clear Failed', err.message, 'error');
+    }
+  };
 
   // Fire starter question passed via router state from the overview page
   useEffect(() => {
@@ -130,7 +190,7 @@ export default function ThreePanelLayout({ selectedRepo }) {
       repositoryId: currentRepoId,
       question: qText,
       isPending: true,
-      answer: 'Analyzing codebase AST symbols and vector embeddings...',
+      answer: '',
       citations: [],
       confidence: 'medium'
     };
@@ -138,7 +198,7 @@ export default function ThreePanelLayout({ selectedRepo }) {
     setConversations((prev) => [...prev, pendingMsg]);
 
     try {
-      const res = await fetch(`${API_BASE_URL}/chat`, {
+      const res = await fetch(`${API_BASE_URL}/chat/stream`, {
         method: 'POST',
         headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
@@ -176,14 +236,73 @@ export default function ThreePanelLayout({ selectedRepo }) {
         throw new Error(`HTTP ${res.status}${errText ? ': ' + errText.slice(0, 120) : ''}`);
       }
 
-      const data = await res.json();
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let accumulatedAnswer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data:')) continue;
+
+          const jsonStr = trimmed.slice(5).trim();
+          try {
+            const event = JSON.parse(jsonStr);
+            if (event.type === 'token') {
+              accumulatedAnswer += event.text;
+              setConversations((prev) =>
+                prev.map((msg) =>
+                  msg.id === tempId
+                    ? { ...msg, answer: accumulatedAnswer, isPending: true }
+                    : msg
+                )
+              );
+            } else if (event.type === 'done') {
+              setConversations((prev) =>
+                prev.map((msg) =>
+                  msg.id === tempId
+                    ? {
+                        ...msg,
+                        isPending: false,
+                        answer: event.answer || accumulatedAnswer,
+                        citations: event.citations || [],
+                        confidence: event.confidence || 'high',
+                        execution_time_ms: event.execution_time_ms,
+                        thought_process: event.thought_process,
+                      }
+                    : msg
+                )
+              );
+              if (event.citations && event.citations.length > 0) {
+                setActiveCitation(event.citations[0]);
+              }
+            } else if (event.type === 'error') {
+              throw new Error(event.message || 'Streaming response error');
+            }
+          } catch (jsonErr) {
+            if (jsonErr.message && !jsonErr.message.includes('JSON')) {
+              throw jsonErr;
+            }
+          }
+        }
+      }
+
       setConversations((prev) =>
-        prev.map((msg) => (msg.id === tempId ? data : msg))
+        prev.map((msg) =>
+          msg.id === tempId && msg.isPending
+            ? { ...msg, isPending: false }
+            : msg
+        )
       );
 
-      if (data.citations && data.citations.length > 0) {
-        setActiveCitation(data.citations[0]);
-      }
     } catch (err) {
       addToast('Request Failed', err.message, 'error');
       setConversations((prev) =>
@@ -200,11 +319,12 @@ export default function ThreePanelLayout({ selectedRepo }) {
     <>
       <Toast toasts={toasts} onDismiss={dismissToast} />
       <div className="three-panel-container">
-        <NavPanel selectedRepo={{ id: currentRepoId }} onSelectFile={handleSelectFile} />
+        <NavPanel repoId={currentRepoId} selectedRepo={selectedRepo || { id: currentRepoId }} onSelectFile={handleSelectFile} />
         <ChatPanel
           conversations={conversations}
           onSelectCitation={handleSelectCitation}
           onAskQuestion={handleAskQuestion}
+          onClearChat={handleClearChat}
         />
         <EvidencePanel
           repoId={currentRepoId}

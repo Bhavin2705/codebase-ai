@@ -166,15 +166,51 @@ class CodeParserService:
     for JavaScript, TypeScript, JSX, TSX, Java, and fallback languages without heavy native C binaries.
     """
 
+    def _chunk_file(self, file_path: str, code_content: str) -> List[Dict[str, Any]]:
+        lines = code_content.splitlines()
+        total_lines = len(lines)
+        if total_lines == 0:
+            return []
+
+        chunks: List[Dict[str, Any]] = []
+        chunk_size = 120
+        overlap = 20
+        step = chunk_size - overlap
+
+        start = 0
+        while start < total_lines:
+            end = min(start + chunk_size, total_lines)
+            chunk_lines = lines[start:end]
+            start_line = start + 1
+            end_line = end
+            chunk_source = "\n".join(chunk_lines)
+
+            chunks.append({
+                "name": f"FileChunk_{start_line}_{end_line}",
+                "symbol_type": "chunk",
+                "signature": file_path,
+                "source_code": chunk_source,
+                "start_line": start_line,
+                "end_line": end_line,
+            })
+
+            if end >= total_lines:
+                break
+            start += step
+
+        return chunks
+
     def parse_file(self, file_path: str, code_content: str, language: str) -> List[Dict[str, Any]]:
+        # For large files or minified code over 50KB, generate deterministic line chunks
+        if len(code_content) > 50000 or any(len(line) > 1000 for line in code_content.splitlines()[:10]):
+            return self._chunk_file(file_path, code_content)
+
         target = language.lower().strip(".")
 
         if target in ("py", "python"):
             return self._parse_python(file_path, code_content)
         elif target in ("js", "jsx", "javascript", "mjs", "cjs", "ts", "tsx", "typescript"):
             return self._parse_javascript_typescript(file_path, code_content)
-        elif target in ("java",):
-            return self._parse_java(file_path, code_content)
         else:
             return self._fallback_parse(file_path, code_content, target)
 
@@ -370,63 +406,6 @@ class CodeParserService:
 
         return self._fallback_parse(file_path, code_content, "javascript")
 
-    def _parse_java(self, file_path: str, code_content: str) -> List[Dict[str, Any]]:
-        extracted_symbols: List[Dict[str, Any]] = []
-
-        # 1. Classes, Interfaces, Enums, Records
-        type_pattern = re.compile(
-            r"(?:public|protected|private|static|final|abstract)?\s*(?:class|interface|enum|record)\s+([A-Za-z0-9_]+)(?:<[^>]+>)?(?:\s+extends\s+[A-Za-z0-9_.]+)?(?:\s+implements\s+[A-Za-z0-9_.,\s]+)?\s*\{",
-            re.MULTILINE
-        )
-        for match in type_pattern.finditer(code_content):
-            start_pos = match.start()
-            line_no = code_content[:start_pos].count("\n") + 1
-            type_name = match.group(1)
-
-            end_brace = find_matching_brace(code_content, match.end() - 1)
-            end_pos = end_brace + 1 if end_brace != -1 else match.end()
-            end_line = code_content[:end_pos].count("\n") + 1
-
-            extracted_symbols.append({
-                "name": type_name,
-                "symbol_type": "class",
-                "signature": f"public class {type_name}",
-                "source_code": code_content[start_pos:end_pos].strip(),
-                "start_line": line_no,
-                "end_line": max(line_no, end_line),
-            })
-
-        # 2. Methods and Constructors
-        method_pattern = re.compile(
-            r"(?:public|protected|private|static|final|synchronized|abstract|default)?\s*(?:<[^>]+>\s*)?(?:[A-Za-z0-9_<>,\[\]]+\s+)?([A-Za-z0-9_]+)\s*\(([^)]*)\)\s*(?:throws\s+[A-Za-z0-9_,\s]+)?\s*\{",
-            re.MULTILINE
-        )
-        keywords = {"if", "while", "for", "switch", "catch", "synchronized", "static"}
-        for match in method_pattern.finditer(code_content):
-            method_name, params = match.groups()
-            if method_name in keywords:
-                continue
-
-            start_pos = match.start()
-            line_no = code_content[:start_pos].count("\n") + 1
-
-            end_brace = find_matching_brace(code_content, match.end() - 1)
-            end_pos = end_brace + 1 if end_brace != -1 else match.end()
-            end_line = code_content[:end_pos].count("\n") + 1
-
-            extracted_symbols.append({
-                "name": method_name,
-                "symbol_type": "method",
-                "signature": f"{method_name}({params.strip()})",
-                "source_code": code_content[start_pos:end_pos].strip(),
-                "start_line": line_no,
-                "end_line": max(line_no, end_line),
-            })
-
-        if extracted_symbols:
-            return extracted_symbols
-
-        return self._fallback_parse(file_path, code_content, "java")
 
     def _fallback_parse(self, file_path: str, code_content: str, target_language: str) -> List[Dict[str, Any]]:
         extracted_symbols: List[Dict[str, Any]] = []

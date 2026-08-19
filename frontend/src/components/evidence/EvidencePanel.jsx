@@ -16,8 +16,20 @@ export default function EvidencePanel({ repoId, activeCitation, onClose }) {
 
     setLoading(true);
     fetch(`${API_BASE_URL}/repositories/${encodeURIComponent(repoId)}/file?path=${encodeURIComponent(path)}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
+      .then(async (res) => {
+        if (res.status === 404) {
+          setFileContent('// Source file is no longer available.');
+          return;
+        }
+        if (res.status >= 500) {
+          setFileContent('// Unable to load source code from the backend.');
+          return;
+        }
+        if (!res.ok) {
+          setFileContent('// Unable to load source code from the backend.');
+          return;
+        }
+        const data = await res.json();
         if (data && data.content) {
           setFileContent(data.content);
         } else {
@@ -25,7 +37,7 @@ export default function EvidencePanel({ repoId, activeCitation, onClose }) {
         }
       })
       .catch(() => {
-        setFileContent(`// Unable to load code content for ${path}`);
+        setFileContent('// Backend connection failed.');
       })
       .finally(() => setLoading(false));
   }, [activeCitation, repoId]);

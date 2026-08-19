@@ -52,3 +52,18 @@ def test_fallback_parsing():
     assert len(symbols_mjs) >= 1
     assert symbols_mjs[0]["name"] == "handler"
 
+def test_guard_large_and_minified_files():
+    parser = CodeParserService()
+    # Large content over 50KB
+    large_code = "x = 1\n" * 15000  # > 50KB
+    res_large = parser.parse_file("large.py", large_code, "python")
+    assert len(res_large) > 1
+    assert res_large[0]["symbol_type"] == "chunk"
+
+    # Minified line over 1000 chars
+    minified_code = "var a=" + "1+" * 600 + "1;\n"
+    res_min = parser.parse_file("bundle.min.js", minified_code, "javascript")
+    assert len(res_min) >= 1
+    assert res_min[0]["symbol_type"] == "chunk"
+
+

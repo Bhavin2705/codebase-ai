@@ -1,11 +1,20 @@
 import uuid
 from datetime import datetime
 from typing import List, Dict, Any
-from fastapi import APIRouter, HTTPException, status, Query, Depends, BackgroundTasks
+
+from fastapi import (
+    APIRouter,
+    HTTPException,
+    status,
+    Query,
+    Depends,
+    BackgroundTasks,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
-from app.database import get_db, AsyncSessionLocal
+from app.database import get_db
 from app.config import verify_api_key
 from app.models.repository import Repository
 from app.models.file import File as FileModel
@@ -14,6 +23,7 @@ from app.schemas.repository import RepoImportRequest, RepoResponse, RepoStats
 from app.services.indexing_service import indexing_service
 from app.services.git_service import GitService
 
+
 git_service = GitService()
 
 router = APIRouter(prefix="/repositories", tags=["Repositories"])
@@ -21,32 +31,45 @@ router = APIRouter(prefix="/repositories", tags=["Repositories"])
 
 def build_tree_from_paths(file_paths: List[str]) -> List[Dict[str, Any]]:
     root: Dict[str, Any] = {"children": {}}
+
     for path in file_paths:
         parts = path.replace("\\", "/").split("/")
         curr = root
+
         for i, segment in enumerate(parts):
             if i == len(parts) - 1:
-                curr["children"][segment] = {"name": segment, "type": "file", "path": path}
+                curr["children"][segment] = {
+                    "name": segment,
+                    "type": "file",
+                    "path": path,
+                }
             else:
                 if segment not in curr["children"]:
-                    curr["children"][segment] = {"name": segment, "type": "folder", "children": {}}
+                    curr["children"][segment] = {
+                        "name": segment,
+                        "type": "folder",
+                        "children": {},
+                    }
+
                 curr = curr["children"][segment]
 
     def _convert(nodes: Dict[str, Any]) -> List[Dict[str, Any]]:
         tree_nodes = []
+
         for key, data in nodes.items():
             if data["type"] == "folder":
                 tree_nodes.append({
                     "name": data["name"],
                     "type": "folder",
-                    "children": _convert(data["children"])
+                    "children": _convert(data["children"]),
                 })
             else:
                 tree_nodes.append({
                     "name": data["name"],
                     "type": "file",
-                    "path": data["path"]
+                    "path": data["path"],
                 })
+
         return tree_nodes
 
     return _convert(root["children"])
@@ -60,35 +83,56 @@ async def _get_repo(repository_id: str, db: AsyncSession) -> Repository:
     try:
         repo_uuid = uuid.UUID(repository_id)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid repository_id format")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid repository_id format",
+        )
 
     stmt = select(Repository).where(Repository.id == repo_uuid)
     repo = (await db.execute(stmt)).scalars().first()
+
     if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Repository not found",
+        )
+
     return repo
 
 
-@router.post("", status_code=status.HTTP_201_CREATED, response_model=RepoResponse, dependencies=[Depends(verify_api_key)])
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    response_model=RepoResponse,
+    dependencies=[Depends(verify_api_key)],
+)
 async def import_repository(
     payload: RepoImportRequest,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     clean_url = payload.github_url.strip()
+
     if not clean_url.startswith("http://") and not clean_url.startswith("https://"):
-        raise HTTPException(status_code=400, detail="Invalid repository URL")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid repository URL",
+        )
 
     # Fast preflight check
     is_accessible = git_service.check_repository_accessible(clean_url)
+
     if not is_accessible:
         raise HTTPException(
             status_code=404,
-            detail="Repository not found or is private on GitHub. No indexing job was created."
+            detail="Repository not found or is private on GitHub. No indexing job was created.",
         )
 
-    stmt_exist = select(Repository).where(Repository.github_url == clean_url)
+    stmt_exist = select(Repository).where(
+        Repository.github_url == clean_url
+    )
     existing_repo = (await db.execute(stmt_exist)).scalars().first()
+
     if existing_repo:
         return {
             "id": str(existing_repo.id),
@@ -98,15 +142,22 @@ async def import_repository(
             "status": existing_repo.status or "ready",
             "commit_sha": existing_repo.commit_sha,
             "indexed_at": existing_repo.indexed_at,
-            "stats": RepoStats(files=existing_repo.file_count, symbols=existing_repo.symbol_count)
+            "stats": RepoStats(
+                files=existing_repo.file_count,
+                symbols=existing_repo.symbol_count,
+            ),
         }
 
     parts = clean_url.rstrip("/").split("/")
-    repository_name = f"{parts[-2]}/{parts[-1].replace('.git', '')}"
+    repository_name = (
+        f"{parts[-2]}/{parts[-1].replace('.git', '')}"
+    )
+
     repository_id = uuid.uuid4()
     job_id = uuid.uuid4()
 
     from datetime import timezone
+
     now_utc = datetime.now(timezone.utc)
 
     repository = Repository(
@@ -115,20 +166,25 @@ async def import_repository(
         github_url=clean_url,
         language="Multi-Language",
         status="pending",
-        created_at=now_utc
+        created_at=now_utc,
     )
+
     db.add(repository)
 
     indexing_job = IndexingJob(
         id=job_id,
         repository_id=repository_id,
         status="pending",
-        current_stage="cloning"
+        current_stage="cloning",
     )
+
     db.add(indexing_job)
     await db.commit()
 
-    background_tasks.add_task(_run_indexing_task, str(job_id))
+    background_tasks.add_task(
+        _run_indexing_task,
+        str(job_id),
+    )
 
     return {
         "id": str(repository_id),
@@ -138,16 +194,22 @@ async def import_repository(
         "status": "pending",
         "commit_sha": None,
         "indexed_at": None,
-        "stats": RepoStats(files=0, symbols=0)
+        "stats": RepoStats(files=0, symbols=0),
     }
 
 
-@router.get("", response_model=List[RepoResponse])
-async def list_repositories(db: AsyncSession = Depends(get_db)):
+@router.get(
+    "",
+    response_model=List[RepoResponse],
+)
+async def list_repositories(
+    db: AsyncSession = Depends(get_db),
+):
     stmt = select(Repository)
     repos = (await db.execute(stmt)).scalars().all()
 
     result = []
+
     for repo in repos:
         result.append({
             "id": str(repo.id),
@@ -157,37 +219,71 @@ async def list_repositories(db: AsyncSession = Depends(get_db)):
             "status": repo.status or "ready",
             "commit_sha": repo.commit_sha,
             "indexed_at": repo.indexed_at,
-            "stats": RepoStats(files=repo.file_count, symbols=repo.symbol_count)
+            "stats": RepoStats(
+                files=repo.file_count,
+                symbols=repo.symbol_count,
+            ),
         })
 
     return result
 
 
 @router.get("/{repository_id}/tree")
-async def get_repository_tree(repository_id: str, db: AsyncSession = Depends(get_db)):
+async def get_repository_tree(
+    repository_id: str,
+    db: AsyncSession = Depends(get_db),
+):
     repo = await _get_repo(repository_id, db)
-    stmt = select(FileModel.path).where(FileModel.repository_id == repo.id)
+
+    stmt = select(FileModel.path).where(
+        FileModel.repository_id == repo.id
+    )
+
     paths = (await db.execute(stmt)).scalars().all()
+
     return build_tree_from_paths(list(paths))
 
 
 @router.get("/{repository_id}/file")
-async def get_repository_file(repository_id: str, path: str = Query(...), db: AsyncSession = Depends(get_db)):
+async def get_repository_file(
+    repository_id: str,
+    path: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
     repo = await _get_repo(repository_id, db)
 
     # Sanitize and normalize relative path
-    normalized_path = path.replace("\\", "/").strip().lstrip("/")
-    if ".." in normalized_path or normalized_path.startswith("/"):
-        raise HTTPException(status_code=400, detail="Invalid path format")
-
-    stmt = select(FileModel).where(
-        FileModel.repository_id == repo.id,
-        FileModel.path == normalized_path
+    normalized_path = (
+        path.replace("\\", "/")
+        .strip()
+        .lstrip("/")
     )
+
+    if ".." in normalized_path or normalized_path.startswith("/"):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid path format",
+        )
+
+    # Eagerly load symbols because this endpoint uses AsyncSession.
+    # Accessing target.symbols with the default lazy loading can cause
+    # SQLAlchemy MissingGreenlet errors.
+    stmt = (
+        select(FileModel)
+        .options(selectinload(FileModel.symbols))
+        .where(
+            FileModel.repository_id == repo.id,
+            FileModel.path == normalized_path,
+        )
+    )
+
     target = (await db.execute(stmt)).scalars().first()
 
     if not target:
-        raise HTTPException(status_code=404, detail="File not found")
+        raise HTTPException(
+            status_code=404,
+            detail="File not found",
+        )
 
     symbols_list = [
         {
@@ -195,24 +291,30 @@ async def get_repository_file(repository_id: str, path: str = Query(...), db: As
             "symbol_type": sym.symbol_type,
             "signature": sym.signature,
             "start_line": sym.start_line,
-            "end_line": sym.end_line
+            "end_line": sym.end_line,
         }
         for sym in target.symbols
     ]
+
     return {
         "path": target.path,
         "content": target.content or "",
-        "symbols": symbols_list
+        "symbols": symbols_list,
     }
 
 
-@router.post("/{repository_id}/index", status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(verify_api_key)])
+@router.post(
+    "/{repository_id}/index",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(verify_api_key)],
+)
 async def index_repository(
     repository_id: str,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     repo = await _get_repo(repository_id, db)
+
     job_uuid = uuid.uuid4()
     job_id = str(job_uuid)
 
@@ -220,26 +322,50 @@ async def index_repository(
         id=job_uuid,
         repository_id=repo.id,
         status="pending",
-        current_stage="cloning"
+        current_stage="cloning",
     )
+
     db.add(job)
     await db.commit()
 
-    background_tasks.add_task(_run_indexing_task, job_id)
-    return {"job_id": job_id, "status": "pending"}
+    background_tasks.add_task(
+        _run_indexing_task,
+        job_id,
+    )
+
+    return {
+        "job_id": job_id,
+        "status": "pending",
+    }
+
+
 
 
 @router.get("/{repository_id}/indexing-jobs/{job_id}")
-async def get_indexing_job_status(repository_id: str, job_id: str, db: AsyncSession = Depends(get_db)):
+async def get_indexing_job_status(
+    repository_id: str,
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+):
     try:
         job_uuid = uuid.UUID(job_id)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid job_id format")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid job_id format",
+        )
 
-    stmt = select(IndexingJob).where(IndexingJob.id == job_uuid)
+    stmt = select(IndexingJob).where(
+        IndexingJob.id == job_uuid
+    )
+
     job = (await db.execute(stmt)).scalars().first()
+
     if not job:
-        raise HTTPException(status_code=404, detail="Indexing job not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Indexing job not found",
+        )
 
     return {
         "job_id": str(job.id),
@@ -248,5 +374,5 @@ async def get_indexing_job_status(repository_id: str, job_id: str, db: AsyncSess
         "progress": job.progress,
         "error_message": job.error_message,
         "started_at": job.started_at,
-        "completed_at": job.completed_at
+        "completed_at": job.completed_at,
     }
