@@ -2,7 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowRight, HelpCircle } from 'lucide-react';
 
-export default function RepoOverview({ repo, repositories, onSelectQuestion }) {
+export default function RepoOverview({ repo, repositories, onSelectQuestion, isBackendOnline = true, onRetryBackend }) {
   const navigate = useNavigate();
 
   const currentRepo = (repositories && repo)
@@ -76,11 +76,22 @@ export default function RepoOverview({ repo, repositories, onSelectQuestion }) {
       <div className="overview-container">
         <div className="overview-card" style={{ textAlign: 'center', padding: '40px 20px' }}>
           <h1 style={{ fontSize: '18px', fontWeight: 600, color: 'var(--text-main)' }}>
-            No Repository Selected
+            {!isBackendOnline ? 'Backend Server Waking Up...' : 'No Repository Selected'}
           </h1>
-          <p style={{ color: 'var(--text-subtle)', fontSize: '13px', marginTop: '8px' }}>
-            Import a GitHub repository using the header button to start indexing and querying source code.
+          <p style={{ color: 'var(--text-subtle)', fontSize: '13px', marginTop: '8px', maxWidth: '500px', margin: '8px auto 0' }}>
+            {!isBackendOnline
+              ? 'Render free instances sleep after inactivity. The server is spinning up now and will load repositories shortly (~30–50s).'
+              : 'Import a GitHub repository using the header button to start indexing and querying source code.'}
           </p>
+          {!isBackendOnline && onRetryBackend && (
+            <button
+              className="btn btn-secondary"
+              onClick={onRetryBackend}
+              style={{ marginTop: '16px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
+              <span>Refresh Repositories</span>
+            </button>
+          )}
         </div>
       </div>
     );

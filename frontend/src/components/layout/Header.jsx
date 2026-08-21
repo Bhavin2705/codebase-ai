@@ -2,7 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bot, FolderPlus } from 'lucide-react';
 
-export default function Header({ repositories, selectedRepo, onSelectRepo, onOpenImport }) {
+export default function Header({ repositories, selectedRepo, onSelectRepo, onOpenImport, isBackendOnline = true }) {
   const navigate = useNavigate();
   const repoList = repositories && repositories.length > 0 ? repositories : [];
 
@@ -16,6 +16,34 @@ export default function Header({ repositories, selectedRepo, onSelectRepo, onOpe
       >
         <Bot size={18} style={{ color: 'var(--accent-cyan)' }} />
         <span className="brand-badge">AI Codebase Knowledge Assistant</span>
+        <div
+          title={isBackendOnline ? 'Backend service online' : 'Backend waking up / offline'}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '5px',
+            padding: '2px 7px',
+            borderRadius: '12px',
+            background: isBackendOnline ? 'rgba(34, 197, 94, 0.1)' : 'rgba(245, 158, 11, 0.15)',
+            border: `1px solid ${isBackendOnline ? 'rgba(34, 197, 94, 0.3)' : 'rgba(245, 158, 11, 0.4)'}`,
+            fontSize: '10px',
+            fontWeight: 600,
+            color: isBackendOnline ? '#4ade80' : '#fbbf24',
+            marginLeft: '6px',
+          }}
+        >
+          <span
+            style={{
+              width: '6px',
+              height: '6px',
+              borderRadius: '50%',
+              background: isBackendOnline ? '#22c55e' : '#f59e0b',
+              boxShadow: isBackendOnline ? '0 0 6px rgba(34, 197, 94, 0.8)' : '0 0 6px rgba(245, 158, 11, 0.8)',
+              animation: isBackendOnline ? 'none' : 'pulse 1.5s infinite',
+            }}
+          />
+          <span>{isBackendOnline ? 'Live' : 'Waking Up'}</span>
+        </div>
       </div>
 
       <div className="repo-selector-group">

@@ -4,6 +4,7 @@ import Header from './components/layout/Header';
 import ThreePanelLayout from './components/layout/ThreePanelLayout';
 import RepoOverview from './components/overview/RepoOverview';
 import RepoImportModal from './components/import/RepoImportModal';
+import BackendStatusBanner from './components/common/BackendStatusBanner';
 import { API_BASE_URL } from './config';
 
 export default function App() {
@@ -13,6 +14,7 @@ export default function App() {
   const [repositories, setRepositories] = useState([]);
   const [selectedRepo, setSelectedRepo] = useState(null);
   const [isImportOpen, setIsImportOpen] = useState(false);
+  const [isBackendOnline, setIsBackendOnline] = useState(true);
 
   // Remember selected repo ID across reloads
   useEffect(() => {
@@ -111,6 +113,13 @@ export default function App() {
     }
   };
 
+  const handleStatusChange = (online) => {
+    setIsBackendOnline(online);
+    if (online && repositories.length === 0) {
+      refreshRepositories();
+    }
+  };
+
   return (
     <>
       <Header
@@ -118,7 +127,10 @@ export default function App() {
         selectedRepo={selectedRepo}
         onSelectRepo={handleSelectRepo}
         onOpenImport={() => setIsImportOpen(true)}
+        isBackendOnline={isBackendOnline}
       />
+
+      <BackendStatusBanner onStatusChange={handleStatusChange} />
 
       <Routes>
         <Route
@@ -127,6 +139,8 @@ export default function App() {
             <RepoOverview
               repo={selectedRepo}
               repositories={repositories}
+              isBackendOnline={isBackendOnline}
+              onRetryBackend={refreshRepositories}
               onSelectQuestion={(q) => {
                 const dest = selectedRepo?.id ? `/workspace/${selectedRepo.id}` : '/workspace';
                 navigate(dest, { state: { initialQuestion: q } });
@@ -136,11 +150,11 @@ export default function App() {
         />
         <Route
           path="/workspace/:repoId"
-          element={<ThreePanelLayout selectedRepo={selectedRepo} />}
+          element={<ThreePanelLayout selectedRepo={selectedRepo} isBackendOnline={isBackendOnline} />}
         />
         <Route
           path="/workspace"
-          element={<ThreePanelLayout selectedRepo={selectedRepo} />}
+          element={<ThreePanelLayout selectedRepo={selectedRepo} isBackendOnline={isBackendOnline} />}
         />
       </Routes>
 
@@ -148,6 +162,7 @@ export default function App() {
         isOpen={isImportOpen}
         onClose={() => setIsImportOpen(false)}
         onStartIndexing={handleStartIndexing}
+        isBackendOnline={isBackendOnline}
       />
     </>
   );

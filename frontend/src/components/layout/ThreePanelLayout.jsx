@@ -231,6 +231,22 @@ export default function ThreePanelLayout({ selectedRepo }) {
         return;
       }
 
+      if (res.status === 502 || res.status === 503 || res.status === 504) {
+        addToast('Backend Waking Up — ' + res.status, 'Render free tier backend is spinning up (~30–50s). Please retry in a moment.', 'error');
+        setConversations((prev) =>
+          prev.map((msg) =>
+            msg.id === tempId
+              ? {
+                  ...msg,
+                  isPending: false,
+                  answer: '⚠️ **Backend is waking up / temporarily offline**\n\nThe Render backend server is spinning up from idle state. It will be online shortly (typically takes ~30–50s). Please wait a moment and click **Re-ask** above.',
+                }
+              : msg
+          )
+        );
+        return;
+      }
+
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
         throw new Error(`HTTP ${res.status}${errText ? ': ' + errText.slice(0, 120) : ''}`);
@@ -304,14 +320,40 @@ export default function ThreePanelLayout({ selectedRepo }) {
       );
 
     } catch (err) {
-      addToast('Request Failed', err.message, 'error');
-      setConversations((prev) =>
-        prev.map((msg) =>
-          msg.id === tempId
-            ? { ...msg, isPending: false, answer: `Error: ${err.message}` }
-            : msg
-        )
-      );
+      const isNetworkFail =
+        err.name === 'TypeError' ||
+        err.message.includes('fetch') ||
+        err.message.includes('network') ||
+        err.message.includes('Failed');
+
+      if (isNetworkFail) {
+        addToast(
+          'Backend Unreachable',
+          'Cannot reach backend on Render. It is likely spinning up from idle (~30–50s).',
+          'error'
+        );
+        setConversations((prev) =>
+          prev.map((msg) =>
+            msg.id === tempId
+              ? {
+                  ...msg,
+                  isPending: false,
+                  answer:
+                    '⚠️ **Backend server is waking up / offline**\n\nThe server on Render is booting up from idle mode. Please wait ~30–50 seconds and click **Re-ask** above.',
+                }
+              : msg
+          )
+        );
+      } else {
+        addToast('Request Failed', err.message, 'error');
+        setConversations((prev) =>
+          prev.map((msg) =>
+            msg.id === tempId
+              ? { ...msg, isPending: false, answer: `Error: ${err.message}` }
+              : msg
+          )
+        );
+      }
     }
   };
 

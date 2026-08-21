@@ -73,7 +73,19 @@ export default function RepoImportModal({ isOpen, onClose, onStartIndexing }) {
       const repoData = await res.json();
       onStartIndexing(repoData);
     } catch (err) {
-      setError(err.message);
+      const isNetwork =
+        err.name === 'TypeError' ||
+        err.message.includes('fetch') ||
+        err.message.includes('network') ||
+        err.message.includes('Failed');
+
+      if (isNetwork) {
+        setError(
+          'Backend is currently offline or waking up from Render standby. Please wait ~30–50 seconds and try again.'
+        );
+      } else {
+        setError(err.message);
+      }
     } finally {
       setLoading(false);
     }
