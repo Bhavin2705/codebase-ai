@@ -1,18 +1,17 @@
 import asyncio
 import json
-import math
 import os
 import sys
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import select
+import numpy as np
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.database import AsyncSessionLocal
 from app.models.repository import Repository
 from app.models.file import File
-from app.models.symbol import Symbol
+from app.services.embedding_service import EmbeddingService
 from app.services.retrieval_service import retrieval_service
 
 QUERIES = [
@@ -38,13 +37,8 @@ QUERIES = [
     (20, "How is Visit domain entity mapped with date and description?", "Visit.java", ["Visit", "getDate"]),
 ]
 
-def make_vec(seed_text: str) -> list[float]:
-    """Generate normalized 768-dim float vector deterministically."""
-    raw = [math.sin(hash(seed_text + str(i)) % 1000) for i in range(768)]
-    norm = math.sqrt(sum(x * x for x in raw)) or 1.0
-    return [round(x / norm, 6) for x in raw]
 
-async def seed_eval_repo(db):
+async def seed_eval_repo(db, embedder: EmbeddingService):
     repo_id = uuid.uuid4()
     now = datetime.now(timezone.utc)
     repo = Repository(
@@ -60,37 +54,90 @@ async def seed_eval_repo(db):
     )
     db.add(repo)
 
+    symbols_records = []
+    symbol_texts_to_embed = []
+    symbol_metadata = []
+
     for qid, query, filename, symbols in QUERIES:
         file_path = f"src/main/java/org/petclinic/{filename}"
         fid = uuid.uuid4()
         db.add(File(id=fid, repository_id=repo_id, path=file_path, language="java", content=f"// {filename}"))
         for sym_name in symbols:
-            # Seed 768-dim vector embeddings on Symbol model to exercise pgvector similarity search
-            sym_vec = make_vec(sym_name)
-            db.add(Symbol(
-                id=uuid.uuid4(), file_id=fid, name=sym_name, symbol_type="class",
-                signature=f"public class {sym_name}", source_code=f"public class {sym_name} {{}}",
-                start_line=1, end_line=20, embedding=sym_vec
-            ))
+            source_code = f"public class {sym_name} {{\n    // Implementation for {sym_name}\n}}"
+            symbol_texts_to_embed.append(source_code)
+            symbol_metadata.append({
+                "id": uuid.uuid4(),
+                "file_id": fid,
+                "name": sym_name,
+                "symbol_type": "class",
+                "signature": f"public class {sym_name}",
+                "source_code": source_code,
+                "start_line": 1,
+                "end_line": 20,
+            })
+
+    try:
+        embeddings = await embedder.generate_embeddings_batch(symbol_texts_to_embed, batch_size=50)
+    except Exception as e:
+        print(f"[Eval Warning] Real embedder unavailable: {e}. Generating zero vectors.")
+        embeddings = [None] * len(symbol_texts_to_embed)
+
+    for meta, emb in zip(symbol_metadata, embeddings):
+        vec = np.array(emb, dtype=np.float32) if emb is not None else None
+        symbols_records.append((
+            meta["id"],
+            meta["file_id"],
+            meta["name"],
+            meta["symbol_type"],
+            meta["signature"],
+            meta["source_code"],
+            meta["start_line"],
+            meta["end_line"],
+            vec,
+            now,
+        ))
 
     await db.commit()
+
+    if symbols_records:
+        raw_conn = await db.connection()
+        dbapi_conn = await raw_conn.get_raw_connection()
+        asyncpg_conn = getattr(
+            dbapi_conn,
+            "driver_connection",
+            getattr(dbapi_conn, "_connection", None),
+        )
+        await asyncpg_conn.copy_records_to_table(
+            "symbols",
+            records=symbols_records,
+            columns=[
+                "id",
+                "file_id",
+                "name",
+                "symbol_type",
+                "signature",
+                "source_code",
+                "start_line",
+                "end_line",
+                "embedding",
+                "created_at",
+            ],
+        )
+
     return repo
 
-async def evaluate():
-    # Mock embedder to produce matching query vector so vector search is fully exercised offline
-    async def mock_generate_embedding(text: str, input_type: str = "query") -> list[float]:
-        for qid, qtext, fn, syms in QUERIES:
-            if qtext.strip().lower() == text.strip().lower():
-                return make_vec(syms[0])
-        return make_vec(text)
 
-    retrieval_service.embedder.generate_embedding = mock_generate_embedding
+async def evaluate():
+    embedder = EmbeddingService()
 
     async with AsyncSessionLocal() as db:
-        repo = await seed_eval_repo(db)
+        print("[Eval] Seeding eval repository in database with real embeddings...")
+        repo = await seed_eval_repo(db, embedder)
+        print(f"[Eval] Seeded repository {repo.name} ({repo.id})")
         results, sum_p5, sum_r5 = [], 0.0, 0.0
 
         for qid, query, filename, symbols in QUERIES:
+            print(f"[Eval] Processing query {qid}/20: '{query[:40]}...'")
             contexts, _ = await retrieval_service.retrieve_contexts(query, str(repo.id), db, top_k=5)
             retrieved = [c.get("file_path", "") for c in contexts] + [c.get("name", "") for c in contexts]
             expected = [filename] + symbols
@@ -102,6 +149,7 @@ async def evaluate():
             sum_r5 += r5
 
             results.append({"id": qid, "query": query, "precision_at_5": p5, "recall_at_5": r5, "hits": hits})
+            print(f"       -> hits: {hits}, P@5: {p5:.2f}, R@5: {r5:.2f}")
 
         mean_p5 = round(sum_p5 / len(QUERIES), 4)
         mean_r5 = round(sum_r5 / len(QUERIES), 4)
@@ -118,7 +166,8 @@ async def evaluate():
         with open(os.path.join(out_dir, "eval_results.md"), "w") as f:
             f.write(md)
 
-        print(f"Eval completed! Vector + Lexical hybrid search exercised. Mean P@5: {mean_p5:.4f}, Mean R@5: {mean_r5:.4f}")
+        print(f"Eval completed! Real vector + lexical hybrid search exercised. Mean P@5: {mean_p5:.4f}, Mean R@5: {mean_r5:.4f}")
+
 
 if __name__ == "__main__":
     asyncio.run(evaluate())

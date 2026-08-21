@@ -76,4 +76,4 @@ Frontend runs at `http://localhost:5173`, backend API at `http://localhost:8000`
 
 - **Evaluation Metric**: 90.0% Mean Recall@5 across 20 reference code queries (`scripts/evaluate_retrieval.py`).
 - **Ingestion Speed**: `asyncpg` COPY reduced symbol database writes from ~11.95s to sub-second on medium repositories.
-- **Test Suite**: 28 passing unit and integration tests (`python -m pytest`).
+- **Test Suite**: 30 passing unit and integration tests (`python -m pytest`).

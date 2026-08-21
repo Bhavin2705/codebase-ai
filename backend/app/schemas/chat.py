@@ -1,4 +1,5 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
 
 class CitationItem(BaseModel):
     id: str
@@ -8,9 +9,11 @@ class CitationItem(BaseModel):
     endLine: int
     symbol: str | None = None
 
+
 class ChatRequest(BaseModel):
     repository_id: str
-    question: str
+    question: str = Field(..., min_length=1, max_length=1000)
+
 
 class ChatResponse(BaseModel):
     id: str

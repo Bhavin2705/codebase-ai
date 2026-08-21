@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = "AI Codebase Knowledge Assistant"
     VERSION: str = "1.0.0"
@@ -17,6 +18,9 @@ class Settings(BaseSettings):
     API_ACCESS_KEY: str = ""
     FRONTEND_URL: str = "http://localhost:5173"
 
+    # Optional Redis connection URL (e.g. redis://localhost:6379 or rediss://... for Upstash)
+    REDIS_URL: str = ""
+
     # "development" | "production" — controls startup auth guard
     ENVIRONMENT: str = "development"
 
@@ -26,24 +30,15 @@ class Settings(BaseSettings):
         case_sensitive=True
     )
 
+
 settings = Settings()
 
-# ── Startup auth guard ────────────────────────────────────────────────────────
+# Startup auth guard: ensure API_ACCESS_KEY is populated in production
 if settings.ENVIRONMENT == "production" and not (settings.API_ACCESS_KEY or "").strip():
     raise RuntimeError(
         "API_ACCESS_KEY must be set when ENVIRONMENT=production. "
         "Set it in your Render environment variables."
     )
-# ─────────────────────────────────────────────────────────────────────────────
 
-from fastapi import Header, HTTPException, status
-
-async def verify_api_key(x_api_key: str = Header(None, alias="X-API-Key")):
-    expected = (settings.API_ACCESS_KEY or "").strip()
-    if not expected:
-        return
-    if not x_api_key or x_api_key != expected:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing API key"
-        )
+# Backward-compatible alias for existing imports
+from app.auth import verify_api_key  # noqa: E402

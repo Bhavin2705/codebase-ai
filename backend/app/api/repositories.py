@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.config import verify_api_key
+from app.limiter import rate_limit
 from app.models.repository import Repository
 from app.models.file import File as FileModel
 from app.models.indexing_job import IndexingJob
@@ -104,7 +105,7 @@ async def _get_repo(repository_id: str, db: AsyncSession) -> Repository:
     "",
     status_code=status.HTTP_201_CREATED,
     response_model=RepoResponse,
-    dependencies=[Depends(verify_api_key)],
+    dependencies=[Depends(verify_api_key), Depends(rate_limit(limit_count=5, window_seconds=60, tag="repo_import"))],
 )
 async def import_repository(
     payload: RepoImportRequest,
@@ -252,48 +253,79 @@ async def get_repository_file(
 ):
     repo = await _get_repo(repository_id, db)
 
-    # Sanitize and normalize relative path
-    normalized_path = (
-        path.replace("\\", "/")
-        .strip()
-        .lstrip("/")
-    )
+    import urllib.parse
+    cleaned_path = urllib.parse.unquote(path).replace("\\", "/").strip()
+    while cleaned_path.startswith("./"):
+        cleaned_path = cleaned_path[2:]
+    cleaned_path = cleaned_path.lstrip("/")
 
-    if ".." in normalized_path or normalized_path.startswith("/"):
+    if ".." in cleaned_path or not cleaned_path:
         raise HTTPException(
             status_code=400,
             detail="Invalid path format",
         )
 
-    # Eagerly load symbols because this endpoint uses AsyncSession.
-    # Accessing target.symbols with the default lazy loading can cause
-    # SQLAlchemy MissingGreenlet errors.
-    stmt = (
-        select(FileModel)
-        .options(selectinload(FileModel.symbols))
-        .where(
-            FileModel.repository_id == repo.id,
-            FileModel.path == normalized_path,
-        )
+    # 1. Exact path match
+    stmt = select(FileModel).where(
+        FileModel.repository_id == repo.id,
+        FileModel.path == cleaned_path,
     )
-
     target = (await db.execute(stmt)).scalars().first()
+
+    # 2. Case-insensitive match fallback
+    if not target:
+        stmt_case = select(FileModel).where(
+            FileModel.repository_id == repo.id,
+            FileModel.path.ilike(cleaned_path),
+        )
+        target = (await db.execute(stmt_case)).scalars().first()
+
+    # 3. Suffix match fallback (in case path included repository root or prefix folder)
+    if not target:
+        stmt_suffix = select(FileModel).where(
+            FileModel.repository_id == repo.id,
+            FileModel.path.ilike(f"%/{cleaned_path}"),
+        )
+        target = (await db.execute(stmt_suffix)).scalars().first()
+
+    # 4. Filename match fallback if path contained subdirectories
+    if not target and "/" in cleaned_path:
+        filename_only = cleaned_path.split("/")[-1]
+        stmt_name = select(FileModel).where(
+            FileModel.repository_id == repo.id,
+            FileModel.path.ilike(f"%{filename_only}"),
+        )
+        target = (await db.execute(stmt_name)).scalars().first()
 
     if not target:
         raise HTTPException(
             status_code=404,
-            detail="File not found",
+            detail=f"File not found: {cleaned_path}",
         )
+
+    from app.models.symbol import Symbol as SymbolModel
+    stmt_syms = (
+        select(
+            SymbolModel.name,
+            SymbolModel.symbol_type,
+            SymbolModel.signature,
+            SymbolModel.start_line,
+            SymbolModel.end_line,
+        )
+        .where(SymbolModel.file_id == target.id)
+        .order_by(SymbolModel.start_line.asc())
+    )
+    sym_rows = (await db.execute(stmt_syms)).all()
 
     symbols_list = [
         {
-            "name": sym.name,
-            "symbol_type": sym.symbol_type,
-            "signature": sym.signature,
-            "start_line": sym.start_line,
-            "end_line": sym.end_line,
+            "name": row[0],
+            "symbol_type": row[1],
+            "signature": row[2],
+            "start_line": row[3],
+            "end_line": row[4],
         }
-        for sym in target.symbols
+        for row in sym_rows
     ]
 
     return {
@@ -306,7 +338,7 @@ async def get_repository_file(
 @router.post(
     "/{repository_id}/index",
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(verify_api_key)],
+    dependencies=[Depends(verify_api_key), Depends(rate_limit(limit_count=5, window_seconds=60, tag="repo_index"))],
 )
 async def index_repository(
     repository_id: str,

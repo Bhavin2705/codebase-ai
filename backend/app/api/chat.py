@@ -1,21 +1,72 @@
-import uuid
+import json
+import logging
 import time
+import uuid
+from typing import AsyncGenerator
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi.responses import StreamingResponse
+from sqlalchemy import select, delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.database import get_db
-from app.config import verify_api_key
-from app.models.repository import Repository
+
+from app.auth import verify_api_key
+from app.limiter import rate_limit
+from app.database import AsyncSessionLocal, get_db
 from app.models.chat import Chat as ChatModel
+from app.models.repository import Repository
 from app.schemas.chat import ChatRequest, ChatResponse, CitationItem
 from app.services.llm_service import LLMService
-from app.services.retrieval_service import retrieval_service
+from app.services.retrieval_service import RetrievalService, retrieval_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
-llm_service = LLMService()
+
+# Service dependency providers
+_default_llm_service = LLMService()
+
+
+def get_llm_service() -> LLMService:
+    return _default_llm_service
+
+
+def get_retrieval_service() -> RetrievalService:
+    return retrieval_service
+
+
+GREETING_PATTERNS = {
+    "hi", "hello", "hey", "hi there", "hello there",
+    "good morning", "good evening", "howdy", "thanks", "thank you"
+}
+
+OVERVIEW_INTENT_PATTERNS = [
+    "what is this repo about", "repo about", "repository about", "overview", "what does this repo do",
+    "architecture", "explain repo", "explain repository", "project structure", "readme",
+    "workspace", "workspace about", "what is this workspace about", "project about", "explain project",
+    "explain workspace", "what is this project about", "what does this project do", "summary", "about this"
+]
+
+GREETING_ANSWER = (
+    "Hello! I am your AI Codebase Knowledge Assistant. "
+    "Ask me anything about this repository's architecture, functions, API endpoints, or code logic."
+)
+
+
+def _is_greeting(query: str) -> bool:
+    cleaned = query.strip().lower().rstrip("!.")
+    return cleaned in GREETING_PATTERNS
+
+
+def _classify_query_type(question: str) -> str:
+    q_lower = question.strip().lower()
+    if any(pattern in q_lower for pattern in OVERVIEW_INTENT_PATTERNS):
+        return "Workspace Overview"
+    if len(question.split()) <= 3:
+        return "Fast Query Path"
+    return "Targeted Code RAG"
+
 
 async def _resolve_repository(repo_id_input: str, db: AsyncSession) -> Repository:
-    repo = None
     try:
         parsed_uuid = uuid.UUID(repo_id_input)
         stmt = select(Repository).where(Repository.id == parsed_uuid)
@@ -25,28 +76,38 @@ async def _resolve_repository(repo_id_input: str, db: AsyncSession) -> Repositor
         repo = (await db.execute(stmt)).scalars().first()
 
     if not repo:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Repository not found: {repo_id_input}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Repository not found: {repo_id_input}"
+        )
     return repo
 
-@router.post("", response_model=ChatResponse, dependencies=[Depends(verify_api_key)])
-async def chat_query(payload: ChatRequest, db: AsyncSession = Depends(get_db)):
+
+@router.post("", response_model=ChatResponse, dependencies=[Depends(verify_api_key), Depends(rate_limit(limit_count=20, window_seconds=60, tag="chat"))])
+async def chat_query(
+    payload: ChatRequest,
+    db: AsyncSession = Depends(get_db),
+    llm: LLMService = Depends(get_llm_service),
+    retriever: RetrievalService = Depends(get_retrieval_service),
+):
     start_time = time.time()
-    raw_repo_id = payload.repository_id or "repo-1"
-    repo = await _resolve_repository(raw_repo_id, db)
+    if not payload.repository_id or not payload.repository_id.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="repository_id is required",
+        )
+
+    repo = await _resolve_repository(payload.repository_id.strip(), db)
     repo_id_str = str(repo.id)
 
-    question_text = payload.question.strip().lower()
-
-    greetings = ["hi", "hello", "hey", "hi there", "hello there", "good morning", "good evening", "howdy", "thanks", "thank you"]
-    if question_text in greetings or question_text.rstrip("!.") in greetings:
+    if _is_greeting(payload.question):
         elapsed = round((time.time() - start_time) * 1000, 1)
         chat_id = f"chat-{uuid.uuid4().hex[:8]}"
-        reply = "Hello! I am your AI Codebase Knowledge Assistant. Ask me anything about this repository's architecture, functions, API endpoints, or code logic."
         return {
             "id": chat_id,
             "repository_id": repo_id_str,
             "question": payload.question,
-            "answer": reply,
+            "answer": GREETING_ANSWER,
             "confidence": "high",
             "citations": [],
             "execution_time_ms": elapsed,
@@ -61,33 +122,31 @@ async def chat_query(payload: ChatRequest, db: AsyncSession = Depends(get_db)):
             }
         }
 
-    contexts, repo_meta = await retrieval_service.retrieve_contexts(
+    contexts, repo_meta = await retriever.retrieve_contexts(
         question=payload.question,
         repository_id=repo_id_str,
         db=db,
         top_k=8
     )
 
-    rag_result = await llm_service.generate_rag_response(payload.question, contexts, repo_meta)
+    rag_result = await llm.generate_rag_response(payload.question, contexts, repo_meta)
     elapsed = round((time.time() - start_time) * 1000, 1)
 
-    is_overview_query = any(pattern in question_text for pattern in [
-        "what is this repo about", "repo about", "repository about", "overview", "what does this repo do",
-        "architecture", "explain repo", "explain repository", "project structure", "readme",
-        "workspace", "workspace about", "what is this workspace about", "project about", "explain project",
-        "explain workspace", "what is this project about", "what does this project do", "summary", "about this"
-    ])
-    is_simple_query = len(payload.question.split()) <= 3 and not is_overview_query
+    query_type = _classify_query_type(payload.question)
     analyzed_paths = [ctx["file_path"] for ctx in contexts]
 
     thought_process = {
-        "query_type": "Fast Query Path" if is_simple_query else ("Workspace Overview" if is_overview_query else "Targeted Code RAG"),
+        "query_type": query_type,
         "total_files_scanned": repo_meta.get("total_files", len(contexts)),
         "contexts_retrieved": len(contexts),
         "contexts_analyzed": analyzed_paths,
         "execution_time_ms": elapsed,
         "keywords_extracted": [],
-        "llm_engine": rag_result.get("provider") or (f"NVIDIA NIM ({llm_service.nim_model})" if (llm_service.nim_api_key and llm_service.nim_api_key.startswith("nvapi-")) else f"Gemini ({llm_service.gemini_model})"),
+        "llm_engine": rag_result.get("provider") or (
+            f"NVIDIA NIM ({llm.nim_model})"
+            if (llm.nim_api_key and llm.nim_api_key.startswith("nvapi-"))
+            else f"Gemini ({llm.gemini_model})"
+        ),
     }
 
     record_id = uuid.uuid4()
@@ -116,27 +175,29 @@ async def chat_query(payload: ChatRequest, db: AsyncSession = Depends(get_db)):
     }
 
 
-@router.post("/stream", dependencies=[Depends(verify_api_key)])
-async def chat_query_stream(payload: ChatRequest, db: AsyncSession = Depends(get_db)):
-    import json
-    from fastapi.responses import StreamingResponse
-    from app.database import AsyncSessionLocal
-
+@router.post("/stream", dependencies=[Depends(verify_api_key), Depends(rate_limit(limit_count=20, window_seconds=60, tag="chat"))])
+async def chat_query_stream(
+    payload: ChatRequest,
+    db: AsyncSession = Depends(get_db),
+    llm: LLMService = Depends(get_llm_service),
+    retriever: RetrievalService = Depends(get_retrieval_service),
+):
     start_time = time.time()
-    raw_repo_id = payload.repository_id or "repo-1"
-    repo = await _resolve_repository(raw_repo_id, db)
+    if not payload.repository_id or not payload.repository_id.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="repository_id is required",
+        )
+
+    repo = await _resolve_repository(payload.repository_id.strip(), db)
     repo_id_str = str(repo.id)
     repo_db_id = repo.id
 
-    question_text = payload.question.strip().lower()
-
-    greetings = ["hi", "hello", "hey", "hi there", "hello there", "good morning", "good evening", "howdy", "thanks", "thank you"]
-    if question_text in greetings or question_text.rstrip("!.") in greetings:
-        async def greeting_stream():
+    if _is_greeting(payload.question):
+        async def greeting_stream() -> AsyncGenerator[str, None]:
             elapsed = round((time.time() - start_time) * 1000, 1)
-            reply = "Hello! I am your AI Codebase Knowledge Assistant. Ask me anything about this repository's architecture, functions, API endpoints, or code logic."
-            yield f"data: {json.dumps({'type': 'token', 'text': reply})}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'answer': reply, 'citations': [], 'execution_time_ms': elapsed, 'thought_process': {'query_type': 'Conversational Greeting', 'total_files_scanned': 0, 'contexts_retrieved': 0, 'contexts_analyzed': [], 'execution_time_ms': elapsed, 'keywords_extracted': [], 'llm_engine': 'Instant Router'}})}\n\n"
+            yield f"data: {json.dumps({'type': 'token', 'text': GREETING_ANSWER})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'answer': GREETING_ANSWER, 'citations': [], 'execution_time_ms': elapsed, 'thought_process': {'query_type': 'Conversational Greeting', 'total_files_scanned': 0, 'contexts_retrieved': 0, 'contexts_analyzed': [], 'execution_time_ms': elapsed, 'keywords_extracted': [], 'llm_engine': 'Instant Router'}})}\n\n"
 
         return StreamingResponse(
             greeting_stream(),
@@ -148,29 +209,23 @@ async def chat_query_stream(payload: ChatRequest, db: AsyncSession = Depends(get
             },
         )
 
-    contexts, repo_meta = await retrieval_service.retrieve_contexts(
+    contexts, repo_meta = await retriever.retrieve_contexts(
         question=payload.question,
         repository_id=repo_id_str,
         db=db,
         top_k=8
     )
 
-    is_overview_query = any(pattern in question_text for pattern in [
-        "what is this repo about", "repo about", "repository about", "overview", "what does this repo do",
-        "architecture", "explain repo", "explain repository", "project structure", "readme",
-        "workspace", "workspace about", "what is this workspace about", "project about", "explain project",
-        "explain workspace", "what is this project about", "what does this project do", "summary", "about this"
-    ])
-    is_simple_query = len(payload.question.split()) <= 3 and not is_overview_query
+    query_type = _classify_query_type(payload.question)
     analyzed_paths = [ctx["file_path"] for ctx in contexts]
 
-    async def event_generator():
+    async def event_generator() -> AsyncGenerator[str, None]:
         accumulated_answer = ""
         citations_list = []
         provider_name = ""
 
         try:
-            async for event in llm_service.stream_rag_response(payload.question, contexts, repo_meta):
+            async for event in llm.stream_rag_response(payload.question, contexts, repo_meta):
                 ev_type = event.get("type")
                 if ev_type == "token":
                     accumulated_answer += event.get("text", "")
@@ -182,7 +237,7 @@ async def chat_query_stream(payload: ChatRequest, db: AsyncSession = Depends(get
                     elapsed = round((time.time() - start_time) * 1000, 1)
 
                     thought_process = {
-                        "query_type": "Fast Query Path" if is_simple_query else ("Workspace Overview" if is_overview_query else "Targeted Code RAG"),
+                        "query_type": query_type,
                         "total_files_scanned": repo_meta.get("total_files", len(contexts)),
                         "contexts_retrieved": len(contexts),
                         "contexts_analyzed": analyzed_paths,
@@ -191,7 +246,7 @@ async def chat_query_stream(payload: ChatRequest, db: AsyncSession = Depends(get
                         "llm_engine": provider_name,
                     }
 
-                    # Persist chat history record asynchronously
+                    # Persist chat record asynchronously
                     try:
                         async with AsyncSessionLocal() as session:
                             record_id = uuid.uuid4()
@@ -259,10 +314,8 @@ async def get_chat_history(repository_id: str, db: AsyncSession = Depends(get_db
 
 @router.delete("/history/{repository_id}", dependencies=[Depends(verify_api_key)])
 async def clear_chat_history(repository_id: str, db: AsyncSession = Depends(get_db)):
-    from sqlalchemy import delete as sa_delete
     repo = await _resolve_repository(repository_id, db)
     stmt = sa_delete(ChatModel).where(ChatModel.repository_id == repo.id)
     await db.execute(stmt)
     await db.commit()
     return {"status": "cleared", "repository_id": str(repo.id)}
-

@@ -1,3 +1,5 @@
+import pytest
+
 def test_repository_import_and_index(client):
     import_payload = {"github_url": "https://github.com/spring-projects/spring-petclinic"}
     res = client.post("/repositories", json=import_payload)
@@ -36,4 +38,65 @@ def test_import_nonexistent_repository_fails_preflight(client):
     data = res.json()
     assert "Repository not found" in data["detail"]
     assert "No indexing job was created" in data["detail"]
+
+@pytest.mark.anyio
+async def test_file_viewer_path_resolutions():
+    import uuid
+    from httpx import AsyncClient, ASGITransport
+    from app.main import app
+    from app.database import AsyncSessionLocal
+    from app.models.repository import Repository
+    from app.models.file import File as FileModel
+    from app.models.symbol import Symbol as SymbolModel
+
+    repo_id = uuid.uuid4()
+    file_id = uuid.uuid4()
+    async with AsyncSessionLocal() as session:
+        repo = Repository(
+            id=repo_id,
+            name="test/viewer-test-repo",
+            github_url=f"https://github.com/test/viewer-{repo_id.hex[:6]}",
+            language="Python",
+            status="ready",
+        )
+        file_rec = FileModel(
+            id=file_id,
+            repository_id=repo_id,
+            path="src/components/Main.py",
+            language=".py",
+            content="def execute():\n    return 'success'\n",
+        )
+        sym = SymbolModel(
+            id=uuid.uuid4(),
+            file_id=file_id,
+            name="execute",
+            symbol_type="function",
+            signature="def execute() -> str",
+            source_code="def execute():\n    return 'success'\n",
+            start_line=1,
+            end_line=2,
+        )
+        session.add_all([repo, file_rec, sym])
+        await session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        # Exact path
+        res = await ac.get(f"/repositories/{repo_id}/file?path=src/components/Main.py")
+        assert res.status_code == 200
+        assert "def execute():" in res.json()["content"]
+        assert len(res.json()["symbols"]) == 1
+
+        # Leading ./
+        res_dot = await ac.get(f"/repositories/{repo_id}/file?path=./src/components/Main.py")
+        assert res_dot.status_code == 200
+        assert res_dot.json()["content"] == res.json()["content"]
+
+        # URL encoded and backslashes
+        res_encoded = await ac.get(f"/repositories/{repo_id}/file?path=src%5Ccomponents%5CMain.py")
+        assert res_encoded.status_code == 200
+
+        # Path traversal rejected with 400
+        res_traversal = await ac.get(f"/repositories/{repo_id}/file?path=../../etc/passwd")
+        assert res_traversal.status_code == 400
+
 

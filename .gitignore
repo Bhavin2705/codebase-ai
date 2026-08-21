@@ -45,3 +45,4 @@ test_*.ps1
 test_*.py
 *_body.json
 .vercel
+.env*
